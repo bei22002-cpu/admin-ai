@@ -33,7 +33,7 @@ async def _ai_search(query: str) -> str | None:
                     "anthropic-version": "2023-06-01",
                 },
                 json={
-                    "model": "claude-3-haiku-20240307",
+                    "model": "claude-3-5-haiku-20241022",
                     "system": system_msg,
                     "messages": [{"role": "user", "content": user_msg}],
                     "max_tokens": 500,
