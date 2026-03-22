@@ -688,6 +688,28 @@ async def _handle_followup(request: dict, api_key: str, has_vscode: bool) -> dic
             "data": {"status": "error"},
         }
 
+    # If previous filepath is a directory (multi-file project), find the entry point
+    if os.path.isdir(prev_filepath):
+        entry_candidates = ["main.py", "app.py", "index.py", "index.js", "main.js"]
+        entry_file = None
+        for candidate in entry_candidates:
+            candidate_path = os.path.join(prev_filepath, candidate)
+            if os.path.exists(candidate_path):
+                entry_file = candidate_path
+                break
+        if not entry_file:
+            # Fall back to first .py or .js file found
+            for fname in sorted(os.listdir(prev_filepath)):
+                if fname.endswith((".py", ".js", ".ts")) and not fname.startswith("test"):
+                    entry_file = os.path.join(prev_filepath, fname)
+                    break
+        if not entry_file:
+            return {
+                "message": f"No source files found in previous project: {prev_filepath}",
+                "data": {"status": "error"},
+            }
+        prev_filepath = entry_file
+
     with open(prev_filepath) as f:
         existing_code = f.read()
 
