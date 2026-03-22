@@ -157,8 +157,8 @@ async def _call_anthropic(
     max_tokens: int = 2500,
     use_heavy_model: bool = False,
 ) -> str:
-    """Call Anthropic API. Uses claude-sonnet-4-20250514 / claude-3-5-haiku-20241022."""
-    model = "claude-sonnet-4-20250514" if use_heavy_model else "claude-3-5-haiku-20241022"
+    """Call Anthropic API. Uses claude-sonnet-4-20250514 / claude-haiku-4-5-20251001."""
+    model = "claude-sonnet-4-20250514" if use_heavy_model else "claude-haiku-4-5-20251001"
     timeout = 180.0 if use_heavy_model else 90.0
 
     # Anthropic uses a different message format:
@@ -1094,7 +1094,7 @@ async def _handle_single_file(
 
     provider = _get_ai_provider()
     if provider == "anthropic":
-        model_used = "claude-sonnet-4-20250514" if complex_mode else "claude-3-5-haiku-20241022"
+        model_used = "claude-sonnet-4-20250514" if complex_mode else "claude-haiku-4-5-20251001"
     else:
         model_used = "gpt-4o" if complex_mode else "gpt-4o-mini"
     if success:
@@ -1302,7 +1302,7 @@ async def _handle_project(
 
     provider = _get_ai_provider()
     if provider == "anthropic":
-        model_used = "claude-sonnet-4-20250514" if complex_mode else "claude-3-5-haiku-20241022"
+        model_used = "claude-sonnet-4-20250514" if complex_mode else "claude-haiku-4-5-20251001"
     else:
         model_used = "gpt-4o" if complex_mode else "gpt-4o-mini"
     return {
