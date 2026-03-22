@@ -357,7 +357,10 @@ SYSTEM_PROMPT_SINGLE = textwrap.dedent("""\
     - Follow PEP 8 (Python) or standard style guides.
     - If the request is vague, build something impressive and functional.
     - Prefer standard library over third-party packages when possible.
-    - Structure code with classes and functions, not loose scripts.\
+    - Structure code with classes and functions, not loose scripts.
+    - NEVER use input() or any interactive stdin prompts. The code runs headlessly.
+    - Instead of interactive input, use hardcoded demo values or command-line args.
+    - The main block must produce visible console output to prove it works.\
 """)
 
 SYSTEM_PROMPT_FIX = textwrap.dedent("""\
@@ -374,7 +377,9 @@ SYSTEM_PROMPT_FIX = textwrap.dedent("""\
     - The code must be COMPLETE — don't return partial snippets.
     - Fix ALL errors, not just the first one.
     - Keep the original functionality intact.
-    - Make sure the fixed code actually runs and produces output.\
+    - Make sure the fixed code actually runs and produces output.
+    - NEVER use input() or interactive stdin. Use hardcoded demo values instead.
+    - The code runs headlessly — no user interaction is possible.\
 """)
 
 SYSTEM_PROMPT_EDIT = textwrap.dedent("""\
