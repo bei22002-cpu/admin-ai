@@ -19,9 +19,31 @@ import time
 
 import httpx
 
-MAX_FIX_ATTEMPTS = 5
+MAX_FIX_ATTEMPTS = 10
+MAX_FIX_ATTEMPTS_SIMPLE = 5
 OUTPUT_BASE = os.path.join(os.path.expanduser("~"), "mcp_generated")
 MEMORY_FILE = os.path.join(OUTPUT_BASE, ".mcp_code_memory.json")
+EXEC_TIMEOUT = 120  # seconds
+EXEC_TIMEOUT_SIMPLE = 30  # seconds
+
+# Complexity keywords — trigger the heavy pipeline
+COMPLEX_KEYWORDS = {
+    "business", "enterprise", "production", "fullstack", "full-stack",
+    "microservice", "authentication", "authorization", "oauth",
+    "database", "crud", "rest api", "graphql", "websocket",
+    "dashboard", "admin panel", "e-commerce", "ecommerce",
+    "payment", "stripe", "inventory", "crm", "erp",
+    "machine learning", "neural network", "deep learning",
+    "blockchain", "smart contract", "trading", "analytics",
+    "real-time", "async", "concurrent", "distributed",
+    "scraper", "crawler", "pipeline", "etl",
+    "game engine", "physics", "rendering",
+    "compiler", "interpreter", "parser", "lexer",
+    "operating system", "kernel", "driver",
+    "encryption", "security", "firewall",
+    "multi-file", "complex", "advanced", "sophisticated",
+    "with tests", "with logging", "with config",
+}
 
 
 # ─── Conversation Memory ─────────────────────────────────────────
@@ -63,11 +85,32 @@ def _add_to_memory(request: str, filepath: str, language: str, success: bool) ->
 # ─── AI Communication ────────────────────────────────────────────
 
 
+def _is_complex(request: str) -> bool:
+    """Detect if a request requires the heavy pipeline."""
+    req_lower = request.lower()
+    # Check for complex keywords
+    if any(kw in req_lower for kw in COMPLEX_KEYWORDS):
+        return True
+    # Long requests are usually complex
+    if len(request.split()) > 15:
+        return True
+    return False
+
+
 async def _call_ai(
-    messages: list[dict], api_key: str, max_tokens: int = 2500
+    messages: list[dict],
+    api_key: str,
+    max_tokens: int = 2500,
+    use_heavy_model: bool = False,
 ) -> str:
-    """Send messages to OpenAI and return the response text."""
-    async with httpx.AsyncClient(timeout=90.0) as client:
+    """Send messages to OpenAI and return the response text.
+
+    Uses gpt-4o for complex tasks, gpt-4o-mini for simple ones.
+    """
+    model = "gpt-4o" if use_heavy_model else "gpt-4o-mini"
+    timeout = 180.0 if use_heavy_model else 90.0
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(
             "https://api.openai.com/v1/chat/completions",
             headers={
@@ -75,10 +118,10 @@ async def _call_ai(
                 "Content-Type": "application/json",
             },
             json={
-                "model": "gpt-4o-mini",
+                "model": model,
                 "messages": messages,
                 "max_tokens": max_tokens,
-                "temperature": 0.2,
+                "temperature": 0.15 if use_heavy_model else 0.2,
             },
         )
         if response.status_code == 200:
@@ -309,7 +352,9 @@ def _save_multi_file_project(project_data: dict, project_name: str) -> tuple[str
 # ─── Code Execution ──────────────────────────────────────────────
 
 
-def _run_code(filepath: str, interpreter: str) -> tuple[bool, str, str]:
+def _run_code(
+    filepath: str, interpreter: str, timeout: int = EXEC_TIMEOUT_SIMPLE
+) -> tuple[bool, str, str]:
     """Execute code and return (success, stdout, stderr)."""
     if not interpreter:
         return True, f"File saved: {filepath}", ""
@@ -324,19 +369,49 @@ def _run_code(filepath: str, interpreter: str) -> tuple[bool, str, str]:
             cmd,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=timeout,
             cwd=os.path.dirname(filepath),
         )
-        stdout = result.stdout[:3000] if result.stdout else ""
-        stderr = result.stderr[:3000] if result.stderr else ""
+        stdout = result.stdout[:5000] if result.stdout else ""
+        stderr = result.stderr[:5000] if result.stderr else ""
         success = result.returncode == 0
         return success, stdout, stderr
     except subprocess.TimeoutExpired:
-        return False, "", "Execution timed out (30s limit)."
+        return False, "", f"Execution timed out ({timeout}s limit)."
     except FileNotFoundError:
         return False, "", f"Interpreter not found: {interpreter}"
     except Exception as e:
         return False, "", f"Execution error: {e}"
+
+
+def _read_project_files(project_dir: str) -> str:
+    """Read all source files in a project directory for context."""
+    context_parts: list[str] = []
+    max_files = 15
+    max_chars = 20000
+    total_chars = 0
+
+    for root, _dirs, files in os.walk(project_dir):
+        for fname in sorted(files):
+            if len(context_parts) >= max_files:
+                break
+            if not fname.endswith((".py", ".js", ".ts", ".json", ".txt", ".cfg", ".ini", ".yaml", ".yml")):
+                continue
+            if fname.startswith(".") or "__pycache__" in root:
+                continue
+            fpath = os.path.join(root, fname)
+            rel_path = os.path.relpath(fpath, project_dir)
+            try:
+                with open(fpath) as f:
+                    content = f.read()
+                if total_chars + len(content) > max_chars:
+                    continue
+                total_chars += len(content)
+                context_parts.append(f"--- {rel_path} ---\n{content}")
+            except Exception:
+                continue
+
+    return "\n\n".join(context_parts)
 
 
 # ─── System Prompts ──────────────────────────────────────────────
@@ -360,7 +435,17 @@ SYSTEM_PROMPT_SINGLE = textwrap.dedent("""\
     - Structure code with classes and functions, not loose scripts.
     - NEVER use input() or any interactive stdin prompts. The code runs headlessly.
     - Instead of interactive input, use hardcoded demo values or command-line args.
-    - The main block must produce visible console output to prove it works.\
+    - The main block must produce visible console output to prove it works.
+
+    For complex requests:
+    - Use design patterns (Factory, Strategy, Observer, Repository, etc.) where appropriate.
+    - Implement proper separation of concerns within the file.
+    - Add comprehensive error handling with custom exception classes.
+    - Include logging with proper log levels.
+    - Use dataclasses or NamedTuple for data structures.
+    - Add input validation on all public methods.
+    - Write self-documenting code with clear section headers.
+    - The demo in main() should exercise ALL major features.\
 """)
 
 SYSTEM_PROMPT_FIX = textwrap.dedent("""\
@@ -403,7 +488,9 @@ SYSTEM_PROMPT_PROJECT = textwrap.dedent("""\
     {
         "files": [
             {"path": "main.py", "content": "full file content here"},
+            {"path": "models.py", "content": "full file content here"},
             {"path": "utils.py", "content": "full file content here"},
+            {"path": "config.py", "content": "full file content here"},
             {"path": "requirements.txt", "content": "package1\\npackage2"}
         ],
         "entry_point": "main.py",
@@ -411,14 +498,59 @@ SYSTEM_PROMPT_PROJECT = textwrap.dedent("""\
     }
 
     Project standards:
-    - Separate concerns into multiple files (models, utils, main, config).
+    - Separate concerns into multiple files (models, utils, main, config, services).
     - Include a requirements.txt or package.json with dependencies.
     - Entry point must demonstrate the project working with example usage.
     - Every file must have complete, runnable content.
     - Include proper imports between project files (relative imports).
     - Add docstrings and type hints.
     - Include error handling.
-    - Return ONLY the JSON object, nothing else.\
+    - Return ONLY the JSON object, nothing else.
+
+    For complex/business projects:
+    - Use proper architecture: models/entities, services/business logic, repositories/data layer.
+    - Support subdirectories: {"path": "models/user.py", "content": "..."}.
+    - Include __init__.py files for packages.
+    - Add a config.py for settings and constants.
+    - Include proper logging setup.
+    - Add input validation and custom exceptions.
+    - Generate 5-15 files for complex projects — don't oversimplify.
+    - Include a README.md explaining the project structure.
+    - The entry point should run a comprehensive demo exercising all features.
+    - Use design patterns: Repository, Service, Factory, etc.
+    - Include error handling at every layer.
+    - Use SQLite for database needs (stdlib, no external DB required).
+    - NEVER use input() — all demos use hardcoded example data.\
+""")
+
+SYSTEM_PROMPT_PLAN = textwrap.dedent("""\
+    You are MCP, an elite autonomous AI architect.
+    Before coding a complex project, you create a detailed architecture plan.
+
+    Given a project description, return a JSON plan with this format:
+    {
+        "project_name": "descriptive_name",
+        "architecture": "Brief architecture description",
+        "components": [
+            {"name": "component_name", "file": "path/to/file.py", "responsibility": "what it does"},
+        ],
+        "data_models": [
+            {"name": "ModelName", "fields": ["field1: type", "field2: type"]}
+        ],
+        "key_features": ["feature1", "feature2"],
+        "dependencies": ["package1", "package2"],
+        "design_patterns": ["Pattern1", "Pattern2"],
+        "entry_point": "main.py"
+    }
+
+    Planning rules:
+    - Break complex systems into 5-15 components.
+    - Identify all data models and their relationships.
+    - List external dependencies needed.
+    - Suggest design patterns that fit the use case.
+    - Keep it practical — code must actually run headlessly.
+    - Use SQLite for databases (no external DB servers).
+    - Return ONLY the JSON, no other text.\
 """)
 
 
@@ -476,7 +608,11 @@ def _parse_request(args: str) -> dict:
         for w in [
             "project", "app", "application", "website", "api", "full",
             "scaffold", "with multiple files", "full stack", "backend",
-            "frontend", "dashboard",
+            "frontend", "dashboard", "system", "platform", "service",
+            "engine", "framework", "toolkit", "suite", "manager",
+            "tracker", "monitor", "panel", "portal", "store",
+            "inventory", "crm", "erp", "cms", "blog",
+            "e-commerce", "ecommerce", "marketplace", "business",
         ]
     )
     if is_project:
@@ -785,6 +921,10 @@ async def _handle_single_file(
     has_vscode: bool,
 ) -> dict:
     """Generate a single file, run it, auto-install deps, and auto-fix errors."""
+    complex_mode = _is_complex(args)
+    max_attempts = MAX_FIX_ATTEMPTS if complex_mode else MAX_FIX_ATTEMPTS_SIMPLE
+    exec_timeout = EXEC_TIMEOUT if complex_mode else EXEC_TIMEOUT_SIMPLE
+
     # Build context from memory
     memory = _load_memory()
     context = ""
@@ -796,13 +936,14 @@ async def _handle_single_file(
         )
         context = f"\n\nRecent coding history:\n{context}\n"
 
-    # Step 1: Generate initial code
+    # Step 1: Generate initial code (use heavy model for complex requests)
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT_SINGLE},
         {"role": "user", "content": f"Generate code for: {args}{context}"},
     ]
 
-    raw_code = await _call_ai(messages, api_key)
+    token_limit = 8000 if complex_mode else 2500
+    raw_code = await _call_ai(messages, api_key, max_tokens=token_limit, use_heavy_model=complex_mode)
     code = _strip_markdown_fences(raw_code)
     ext, interpreter, lang = _detect_language(code, args)
 
@@ -812,11 +953,11 @@ async def _handle_single_file(
     install_log = _auto_install_deps(packages, lang, os.path.dirname(filepath))
 
     # Step 3: Run
-    success, stdout, stderr = _run_code(filepath, interpreter)
+    success, stdout, stderr = _run_code(filepath, interpreter, timeout=exec_timeout)
 
     # Step 4: Smart auto-fix loop
     attempt = 1
-    while not success and attempt < MAX_FIX_ATTEMPTS:
+    while not success and attempt < max_attempts:
         attempt += 1
 
         # Check if it's a missing module error
@@ -826,7 +967,7 @@ async def _handle_single_file(
                 dep_log = _auto_install_deps([mod_match.group(1)], lang, os.path.dirname(filepath))
                 if dep_log:
                     install_log += "; " + dep_log if install_log else dep_log
-                success, stdout, stderr = _run_code(filepath, interpreter)
+                success, stdout, stderr = _run_code(filepath, interpreter, timeout=exec_timeout)
                 if success:
                     break
 
@@ -844,7 +985,7 @@ async def _handle_single_file(
             )},
         ]
 
-        raw_fix = await _call_ai(fix_messages, api_key)
+        raw_fix = await _call_ai(fix_messages, api_key, use_heavy_model=complex_mode)
         code = _strip_markdown_fences(raw_fix)
 
         # Check for new deps in fixed code
@@ -857,7 +998,7 @@ async def _handle_single_file(
             packages.extend(new_deps)
 
         filepath = _save_code(code, project_name, ext)
-        success, stdout, stderr = _run_code(filepath, interpreter)
+        success, stdout, stderr = _run_code(filepath, interpreter, timeout=exec_timeout)
 
     # Record in memory
     _add_to_memory(args, filepath, lang, success)
@@ -869,11 +1010,12 @@ async def _handle_single_file(
         except Exception:
             pass
 
+    model_used = "gpt-4o" if complex_mode else "gpt-4o-mini"
     if success:
         msg = (
             f"Code assimilated for: {args}. "
             f"Compiled successfully in {attempt} attempt(s). "
-            f"Saved to {filepath}"
+            f"Model: {model_used}. Saved to {filepath}"
         )
     else:
         msg = (
@@ -890,8 +1032,10 @@ async def _handle_single_file(
             "language": lang,
             "saved_to": filepath,
             "attempts": attempt,
-            "output": stdout[:1000] if stdout else "",
-            "final_error": stderr[:500] if stderr and not success else "",
+            "model": model_used,
+            "complex_mode": complex_mode,
+            "output": stdout[:2000] if stdout else "",
+            "final_error": stderr[:1000] if stderr and not success else "",
             "generated_code": code,
             "deps_installed": install_log,
         },
@@ -907,13 +1051,46 @@ async def _handle_project(
     project_name: str,
     has_vscode: bool,
 ) -> dict:
-    """Generate a multi-file project."""
+    """Generate a multi-file project with optional architecture planning."""
+    complex_mode = _is_complex(args)
+    max_fix = MAX_FIX_ATTEMPTS if complex_mode else MAX_FIX_ATTEMPTS_SIMPLE
+    exec_timeout = EXEC_TIMEOUT if complex_mode else EXEC_TIMEOUT_SIMPLE
+
+    # Step 0: Architecture planning for complex projects
+    plan_data = None
+    plan_context = ""
+    if complex_mode:
+        plan_messages = [
+            {"role": "system", "content": SYSTEM_PROMPT_PLAN},
+            {"role": "user", "content": f"Plan the architecture for: {args}"},
+        ]
+        raw_plan = await _call_ai(
+            plan_messages, api_key, max_tokens=2000, use_heavy_model=True
+        )
+        try:
+            plan_match = re.search(r"\{[\s\S]*\}", raw_plan)
+            if plan_match:
+                plan_data = json.loads(plan_match.group())
+                plan_context = (
+                    f"\n\nArchitecture plan to follow:\n"
+                    f"Components: {json.dumps(plan_data.get('components', []))}\n"
+                    f"Data models: {json.dumps(plan_data.get('data_models', []))}\n"
+                    f"Design patterns: {plan_data.get('design_patterns', [])}\n"
+                    f"Dependencies: {plan_data.get('dependencies', [])}\n"
+                )
+        except (json.JSONDecodeError, AttributeError):
+            pass
+
+    # Step 1: Generate project files
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT_PROJECT},
-        {"role": "user", "content": f"Generate a project for: {args}"},
+        {"role": "user", "content": f"Generate a project for: {args}{plan_context}"},
     ]
 
-    raw_response = await _call_ai(messages, api_key, max_tokens=4000)
+    token_limit = 12000 if complex_mode else 4000
+    raw_response = await _call_ai(
+        messages, api_key, max_tokens=token_limit, use_heavy_model=complex_mode
+    )
     project_data = _parse_multi_file(raw_response)
 
     if not project_data:
@@ -923,7 +1100,7 @@ async def _handle_project(
         filepath = _save_code(code, project_name, ext)
         packages = _extract_imports(code, lang)
         install_log = _auto_install_deps(packages, lang, os.path.dirname(filepath))
-        success, stdout, stderr = _run_code(filepath, interpreter)
+        success, stdout, stderr = _run_code(filepath, interpreter, timeout=exec_timeout)
 
         _add_to_memory(args, filepath, lang, success)
 
@@ -953,33 +1130,48 @@ async def _handle_project(
     error = ""
     run_success = False
     lang = "python"
+    install_log = ""
 
     if entry_path:
         with open(entry_path) as f:
             entry_code = f.read()
         ext, interpreter, lang = _detect_language(entry_code, args)
 
-        # Auto-install deps from entry point
-        packages = _extract_imports(entry_code, lang)
-        _auto_install_deps(packages, lang, project_dir)
+        # Auto-install deps from ALL project files (not just entry point)
+        all_code = _read_project_files(project_dir)
+        packages = _extract_imports(all_code, lang)
+        install_log = _auto_install_deps(packages, lang, project_dir)
 
-        run_success, output, error = _run_code(entry_path, interpreter)
+        run_success, output, error = _run_code(entry_path, interpreter, timeout=exec_timeout)
 
-        # Auto-fix entry point if it fails (up to 3 times)
+        # Cross-file-aware auto-fix loop
         fix_attempt = 0
-        while not run_success and fix_attempt < 3:
+        while not run_success and fix_attempt < max_fix:
             fix_attempt += 1
 
             # Try installing missing module first
             if "ModuleNotFoundError" in error:
                 mod_match = re.search(r"No module named '(\w+)'", error)
                 if mod_match:
-                    _auto_install_deps([mod_match.group(1)], lang, project_dir)
-                    run_success, output, error = _run_code(entry_path, interpreter)
+                    dep_log = _auto_install_deps([mod_match.group(1)], lang, project_dir)
+                    if dep_log:
+                        install_log += "; " + dep_log if install_log else dep_log
+                    run_success, output, error = _run_code(entry_path, interpreter, timeout=exec_timeout)
                     if run_success:
                         break
 
-            with open(entry_path) as f:
+            # Read ALL project files for full context when fixing
+            project_context = _read_project_files(project_dir)
+
+            # Detect which file has the error
+            error_file = entry_path
+            error_match = re.search(r'File "([^"]+)", line \d+', error)
+            if error_match:
+                matched_path = error_match.group(1)
+                if matched_path.startswith(project_dir):
+                    error_file = matched_path
+
+            with open(error_file) as f:
                 current_code = f.read()
 
             fix_messages = [
@@ -987,16 +1179,31 @@ async def _handle_project(
                 {"role": "user", "content": (
                     f"Project: {args}\n"
                     f"Files in project: {file_list}\n\n"
-                    f"Entry point code that failed:\n```\n{current_code}\n```\n\n"
+                    f"ALL project files for context:\n{project_context}\n\n"
+                    f"File with error ({os.path.relpath(error_file, project_dir)}):\n"
+                    f"```\n{current_code}\n```\n\n"
                     f"Error:\n```\n{error}\n```\n\n"
-                    f"Fix the code. It's part of a multi-file project in {project_dir}."
+                    f"Fix ONLY the file that has the error. Return the complete fixed file. "
+                    f"The fix must be compatible with all other project files."
                 )},
             ]
-            raw_fix = await _call_ai(fix_messages, api_key)
+            raw_fix = await _call_ai(
+                fix_messages, api_key, max_tokens=4000, use_heavy_model=complex_mode
+            )
             fixed_code = _strip_markdown_fences(raw_fix)
-            with open(entry_path, "w") as f:
+            with open(error_file, "w") as f:
                 f.write(fixed_code)
-            run_success, output, error = _run_code(entry_path, interpreter)
+
+            # Check for new deps
+            new_packages = _extract_imports(fixed_code, lang)
+            new_deps = [p for p in new_packages if p not in packages]
+            if new_deps:
+                dep_log = _auto_install_deps(new_deps, lang, project_dir)
+                if dep_log:
+                    install_log += "; " + dep_log if install_log else dep_log
+                packages.extend(new_deps)
+
+            run_success, output, error = _run_code(entry_path, interpreter, timeout=exec_timeout)
 
     _add_to_memory(args, project_dir, lang, run_success)
 
@@ -1007,10 +1214,12 @@ async def _handle_project(
         except Exception:
             pass
 
+    model_used = "gpt-4o" if complex_mode else "gpt-4o-mini"
     return {
         "message": (
             f"Project assimilated: {args}. "
-            f"{len(file_list)} files generated in {project_dir}."
+            f"{len(file_list)} files generated in {project_dir}. "
+            f"Model: {model_used}."
         ),
         "data": {
             "request": args,
@@ -1019,7 +1228,11 @@ async def _handle_project(
             "files": file_list,
             "file_count": len(file_list),
             "entry_point": project_data.get("entry_point", ""),
-            "output": output[:500] if output else "",
-            "error": error[:500] if error else "",
+            "model": model_used,
+            "complex_mode": complex_mode,
+            "architecture_plan": plan_data.get("architecture", "") if plan_data else "",
+            "output": output[:2000] if output else "",
+            "error": error[:1000] if error else "",
+            "deps_installed": install_log,
         },
     }
