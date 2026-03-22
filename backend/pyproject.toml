@@ -1,0 +1,42 @@
+[tool.poetry]
+name = "mcp-grid-backend"
+version = "1.0.0"
+description = "MCP Grid - TRON-themed AI Desktop Assistant Backend"
+authors = ["MCP Grid Team"]
+readme = "README.md"
+packages = [{include = "app"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.115.0"
+uvicorn = {extras = ["standard"], version = "^0.30.0"}
+pydantic = "^2.0"
+psutil = "^5.9"
+python-dotenv = "^1.0"
+httpx = "^0.27"
+openai = "^1.0"
+pytesseract = "^0.3"
+pillow = "^10.0"
+pyttsx3 = "^2.90"
+apscheduler = "^3.10"
+websockets = "^12.0"
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.4"
+mypy = "^1.10"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true

@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src http://localhost:*; img-src 'self' data:;"
+    />
+    <title>MCP Grid</title>
+    <link rel="stylesheet" href="styles/tron.css" />
+  </head>
+  <body>
+    <!-- ─── Title Bar ──────────────────────────────────────── -->
+    <div class="title-bar">
+      <div class="title-bar-left">
+        <span class="mcp-logo">MCP</span>
+        <span class="title-text">GRID CONSOLE</span>
+        <span class="phase-badge" id="phaseBadge">PHASE 1</span>
+      </div>
+      <div class="title-bar-controls">
+        <button class="title-btn" id="minimizeBtn" title="Minimize">─</button>
+        <button class="title-btn close-btn" id="closeBtn" title="Close">✕</button>
+      </div>
+    </div>
+
+    <!-- ─── Main Container ─────────────────────────────────── -->
+    <div class="main-container">
+      <!-- Status Bar -->
+      <div class="status-bar">
+        <div class="status-indicator online" id="statusIndicator">
+          <span class="status-dot"></span>
+          <span id="statusText">MCP ONLINE</span>
+        </div>
+        <div class="status-info">
+          <span id="cpuDisplay">CPU: ---%</span>
+          <span id="memDisplay">MEM: ---%</span>
+          <span id="timeDisplay">00:00:00</span>
+        </div>
+      </div>
+
+      <!-- Chat/Output Area -->
+      <div class="chat-container" id="chatContainer">
+        <div class="chat-message system-message">
+          <div class="message-prefix">[MCP]</div>
+          <div class="message-content">
+            MCP online. Awaiting user input.
+            <span class="cursor-blink">█</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Command Buttons -->
+      <div class="command-grid">
+        <button class="cmd-btn" data-cmd="code" title="MCP code">
+          <span class="cmd-icon">⌨</span>
+          <span class="cmd-label">CODE</span>
+        </button>
+        <button class="cmd-btn" data-cmd="search" title="MCP search">
+          <span class="cmd-icon">◎</span>
+          <span class="cmd-label">SEARCH</span>
+        </button>
+        <button class="cmd-btn" data-cmd="access" title="MCP access">
+          <span class="cmd-icon">⬡</span>
+          <span class="cmd-label">ACCESS</span>
+        </button>
+        <button class="cmd-btn" data-cmd="scan" title="MCP scan">
+          <span class="cmd-icon">◈</span>
+          <span class="cmd-label">SCAN</span>
+        </button>
+        <button class="cmd-btn" data-cmd="alert" title="MCP alert">
+          <span class="cmd-icon">⚡</span>
+          <span class="cmd-label">ALERT</span>
+        </button>
+        <button class="cmd-btn" data-cmd="report" title="MCP report">
+          <span class="cmd-icon">◆</span>
+          <span class="cmd-label">REPORT</span>
+        </button>
+        <button class="cmd-btn" data-cmd="analyze" title="MCP analyze">
+          <span class="cmd-icon">◉</span>
+          <span class="cmd-label">ANALYZE</span>
+        </button>
+      </div>
+
+      <!-- Input Area -->
+      <div class="input-area">
+        <span class="input-prefix">MCP&gt;</span>
+        <input
+          type="text"
+          id="commandInput"
+          class="command-input"
+          placeholder='Enter command... (e.g., "code tron dashboard")'
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button class="send-btn" id="sendBtn" title="Execute">▶</button>
+      </div>
+    </div>
+
+    <!-- ─── Scanline Overlay ───────────────────────────────── -->
+    <div class="scanline-overlay"></div>
+
+    <!-- ─── Grid Background ────────────────────────────────── -->
+    <div class="grid-background"></div>
+
+    <script src="components/app.js"></script>
+  </body>
+</html>
