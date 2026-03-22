@@ -1092,7 +1092,11 @@ async def _handle_single_file(
         except Exception:
             pass
 
-    model_used = "gpt-4o" if complex_mode else "gpt-4o-mini"
+    provider = _get_ai_provider()
+    if provider == "anthropic":
+        model_used = "claude-sonnet-4-20250514" if complex_mode else "claude-3-haiku-20240307"
+    else:
+        model_used = "gpt-4o" if complex_mode else "gpt-4o-mini"
     if success:
         msg = (
             f"Code assimilated for: {args}. "
@@ -1296,7 +1300,11 @@ async def _handle_project(
         except Exception:
             pass
 
-    model_used = "gpt-4o" if complex_mode else "gpt-4o-mini"
+    provider = _get_ai_provider()
+    if provider == "anthropic":
+        model_used = "claude-sonnet-4-20250514" if complex_mode else "claude-3-haiku-20240307"
+    else:
+        model_used = "gpt-4o" if complex_mode else "gpt-4o-mini"
     return {
         "message": (
             f"Project assimilated: {args}. "
