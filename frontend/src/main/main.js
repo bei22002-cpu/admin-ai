@@ -19,7 +19,7 @@ const Store = require("electron-store");
 const store = new Store({
   defaults: {
     phase: 1,
-    backendUrl: "http://localhost:1337",
+    backendUrl: "http://127.0.0.1:1337",
     theme: "tron",
     voiceEnabled: true,
     startOnLogin: true,

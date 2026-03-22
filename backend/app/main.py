@@ -145,18 +145,6 @@ async def execute_command(request: CommandRequest) -> CommandResponse:
             timestamp=time.time(),
         )
 
-    # Check phase restrictions
-    phase_commands = phase_manager.get_available_commands()
-    if cmd not in phase_commands:
-        return CommandResponse(
-            status="restricted",
-            message=f"Command '{cmd}' requires Phase {phase_manager.get_required_phase(cmd)}. "
-            f"Current phase: {phase_manager.current_phase}. "
-            f'Say "MCP assimilate phase {phase_manager.get_required_phase(cmd)}" to upgrade.',
-            tron_quote="Access denied. Insufficient clearance.",
-            timestamp=time.time(),
-        )
-
     result = await handler(args)
     return CommandResponse(
         status="success",

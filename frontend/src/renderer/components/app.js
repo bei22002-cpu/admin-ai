@@ -7,7 +7,7 @@
 
 const state = {
   phase: 1,
-  backendUrl: "http://localhost:1337",
+  backendUrl: "http://127.0.0.1:1337",
   isConnected: false,
   commandHistory: [],
   historyIndex: -1,
@@ -315,8 +315,8 @@ sendBtn.addEventListener("click", () => {
   executeCommand(commandInput.value);
 });
 
-// Command grid buttons
-document.querySelectorAll(".cmd-btn").forEach((btn) => {
+// Sidebar command buttons
+document.querySelectorAll(".sidebar-cmd").forEach((btn) => {
   btn.addEventListener("click", () => {
     const cmd = btn.dataset.cmd;
     commandInput.value = `MCP ${cmd} `;
