@@ -315,8 +315,8 @@ sendBtn.addEventListener("click", () => {
   executeCommand(commandInput.value);
 });
 
-// Command grid buttons
-document.querySelectorAll(".cmd-btn").forEach((btn) => {
+// Sidebar command buttons
+document.querySelectorAll(".sidebar-cmd").forEach((btn) => {
   btn.addEventListener("click", () => {
     const cmd = btn.dataset.cmd;
     commandInput.value = `MCP ${cmd} `;

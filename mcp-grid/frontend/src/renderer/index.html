@@ -11,96 +11,133 @@
     <link rel="stylesheet" href="styles/tron.css" />
   </head>
   <body>
-    <!-- ─── Title Bar ──────────────────────────────────────── -->
+    <!-- Title Bar -->
     <div class="title-bar">
       <div class="title-bar-left">
-        <span class="mcp-logo">MCP</span>
-        <span class="title-text">GRID CONSOLE</span>
+        <div class="mcp-logo-group">
+          <span class="mcp-logo">MCP</span>
+          <span class="logo-sub">GRID</span>
+        </div>
+        <div class="title-divider"></div>
         <span class="phase-badge" id="phaseBadge">PHASE 1</span>
       </div>
-      <div class="title-bar-controls">
-        <button class="title-btn" id="minimizeBtn" title="Minimize">─</button>
-        <button class="title-btn close-btn" id="closeBtn" title="Close">✕</button>
+      <div class="title-bar-center">
+        <div class="status-indicator online" id="statusIndicator">
+          <span class="status-dot"></span>
+          <span id="statusText">ONLINE</span>
+        </div>
+      </div>
+      <div class="title-bar-right">
+        <div class="sys-stats">
+          <span class="stat-item" id="cpuDisplay">CPU ---%</span>
+          <span class="stat-sep">|</span>
+          <span class="stat-item" id="memDisplay">MEM ---%</span>
+          <span class="stat-sep">|</span>
+          <span class="stat-item" id="timeDisplay">00:00:00</span>
+        </div>
+        <div class="title-bar-controls">
+          <button class="title-btn" id="minimizeBtn" title="Minimize">&#9472;</button>
+          <button class="title-btn close-btn" id="closeBtn" title="Close">&#10005;</button>
+        </div>
       </div>
     </div>
 
-    <!-- ─── Main Container ─────────────────────────────────── -->
-    <div class="main-container">
-      <!-- Status Bar -->
-      <div class="status-bar">
-        <div class="status-indicator online" id="statusIndicator">
-          <span class="status-dot"></span>
-          <span id="statusText">MCP ONLINE</span>
+    <!-- Main Layout -->
+    <div class="main-layout">
+      <!-- Sidebar -->
+      <aside class="sidebar">
+        <div class="sidebar-section">
+          <div class="sidebar-header">COMMANDS</div>
+          <div class="sidebar-commands">
+            <button class="sidebar-cmd" data-cmd="code" title="Generate code">
+              <span class="sidebar-cmd-icon">&#9000;</span>
+              <span class="sidebar-cmd-text">CODE</span>
+            </button>
+            <button class="sidebar-cmd" data-cmd="search" title="Search the web">
+              <span class="sidebar-cmd-icon">&#9678;</span>
+              <span class="sidebar-cmd-text">SEARCH</span>
+            </button>
+            <button class="sidebar-cmd" data-cmd="access" title="Open apps/files">
+              <span class="sidebar-cmd-icon">&#11041;</span>
+              <span class="sidebar-cmd-text">ACCESS</span>
+            </button>
+            <button class="sidebar-cmd" data-cmd="scan" title="OCR screen">
+              <span class="sidebar-cmd-icon">&#9672;</span>
+              <span class="sidebar-cmd-text">SCAN</span>
+            </button>
+            <button class="sidebar-cmd" data-cmd="alert" title="Set alerts">
+              <span class="sidebar-cmd-icon">&#9889;</span>
+              <span class="sidebar-cmd-text">ALERT</span>
+            </button>
+            <button class="sidebar-cmd" data-cmd="report" title="System status">
+              <span class="sidebar-cmd-icon">&#9670;</span>
+              <span class="sidebar-cmd-text">REPORT</span>
+            </button>
+            <button class="sidebar-cmd" data-cmd="analyze" title="Analyze screen">
+              <span class="sidebar-cmd-icon">&#9673;</span>
+              <span class="sidebar-cmd-text">ANALYZE</span>
+            </button>
+          </div>
         </div>
-        <div class="status-info">
-          <span id="cpuDisplay">CPU: ---%</span>
-          <span id="memDisplay">MEM: ---%</span>
-          <span id="timeDisplay">00:00:00</span>
+        <div class="sidebar-section sidebar-info">
+          <div class="sidebar-header">SYSTEM</div>
+          <div class="sidebar-detail">
+            <span class="detail-label">MODE</span>
+            <span class="detail-value">AUTONOMOUS</span>
+          </div>
+          <div class="sidebar-detail">
+            <span class="detail-label">AI</span>
+            <span class="detail-value">GPT-4o</span>
+          </div>
+          <div class="sidebar-detail">
+            <span class="detail-label">PORT</span>
+            <span class="detail-value">1337</span>
+          </div>
         </div>
-      </div>
+      </aside>
 
-      <!-- Chat/Output Area -->
-      <div class="chat-container" id="chatContainer">
-        <div class="chat-message system-message">
-          <div class="message-prefix">[MCP]</div>
-          <div class="message-content">
-            MCP online. Awaiting user input.
-            <span class="cursor-blink">█</span>
+      <!-- Main Content -->
+      <div class="main-content">
+        <div class="chat-container" id="chatContainer">
+          <div class="chat-message system-message">
+            <div class="message-header">
+              <span class="message-prefix">[MCP]</span>
+            </div>
+            <div class="message-body">
+              MCP online. Grid protocol initialized. Awaiting user input.
+              <span class="cursor-blink">&#9608;</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Input Area -->
+        <div class="input-area">
+          <div class="input-wrapper">
+            <span class="input-prefix">MCP&gt;</span>
+            <input
+              type="text"
+              id="commandInput"
+              class="command-input"
+              placeholder='Enter command... (e.g., "code a REST API", "search quantum computing")'
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <button class="send-btn" id="sendBtn" title="Execute">
+              <span class="send-arrow">&#9654;</span>
+            </button>
+          </div>
+          <div class="input-hints">
+            <span class="hint-item">&#8593;&#8595; History</span>
+            <span class="hint-sep">&#183;</span>
+            <span class="hint-item">Enter to send</span>
           </div>
         </div>
       </div>
-
-      <!-- Command Buttons -->
-      <div class="command-grid">
-        <button class="cmd-btn" data-cmd="code" title="MCP code">
-          <span class="cmd-icon">⌨</span>
-          <span class="cmd-label">CODE</span>
-        </button>
-        <button class="cmd-btn" data-cmd="search" title="MCP search">
-          <span class="cmd-icon">◎</span>
-          <span class="cmd-label">SEARCH</span>
-        </button>
-        <button class="cmd-btn" data-cmd="access" title="MCP access">
-          <span class="cmd-icon">⬡</span>
-          <span class="cmd-label">ACCESS</span>
-        </button>
-        <button class="cmd-btn" data-cmd="scan" title="MCP scan">
-          <span class="cmd-icon">◈</span>
-          <span class="cmd-label">SCAN</span>
-        </button>
-        <button class="cmd-btn" data-cmd="alert" title="MCP alert">
-          <span class="cmd-icon">⚡</span>
-          <span class="cmd-label">ALERT</span>
-        </button>
-        <button class="cmd-btn" data-cmd="report" title="MCP report">
-          <span class="cmd-icon">◆</span>
-          <span class="cmd-label">REPORT</span>
-        </button>
-        <button class="cmd-btn" data-cmd="analyze" title="MCP analyze">
-          <span class="cmd-icon">◉</span>
-          <span class="cmd-label">ANALYZE</span>
-        </button>
-      </div>
-
-      <!-- Input Area -->
-      <div class="input-area">
-        <span class="input-prefix">MCP&gt;</span>
-        <input
-          type="text"
-          id="commandInput"
-          class="command-input"
-          placeholder='Enter command... (e.g., "code tron dashboard")'
-          autocomplete="off"
-          spellcheck="false"
-        />
-        <button class="send-btn" id="sendBtn" title="Execute">▶</button>
-      </div>
     </div>
 
-    <!-- ─── Scanline Overlay ───────────────────────────────── -->
+    <!-- Scanline Overlay -->
     <div class="scanline-overlay"></div>
-
-    <!-- ─── Grid Background ────────────────────────────────── -->
+    <!-- Grid Background -->
     <div class="grid-background"></div>
 
     <script src="components/app.js"></script>
