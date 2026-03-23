@@ -188,7 +188,7 @@ async def _call_ai(
         if _provider_rate_limit_until.get(fallback, 0) <= now:
             primary, fallback = fallback, primary
             api_key = _get_api_key(primary)
-            logger.info("Primary provider in cooldown, routing to %s", primary)
+            logger.warning("Primary provider in cooldown, routing to %s", primary)
 
     # Try primary provider
     call_fn = _call_anthropic if primary == "anthropic" else _call_openai
@@ -199,7 +199,7 @@ async def _call_ai(
     if result.startswith("AI error: max retries exceeded") and fallback:
         fallback_key = _get_api_key(fallback)
         if fallback_key and not fallback_key.startswith("your-"):
-            logger.info(
+            logger.warning(
                 "Provider %s exhausted retries, failing over to %s",
                 primary, fallback,
             )
