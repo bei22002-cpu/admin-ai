@@ -298,7 +298,7 @@ function ConsoleScreen({
     }
   }, [token]);
 
-  // Fetch plans and usage
+  // Fetch plans on mount
   useEffect(() => {
     fetch(`${API}/billing/plans`)
       .then((r) => r.json())
@@ -306,7 +306,11 @@ function ConsoleScreen({
         if (data.status === "success") setPlans(data.plans);
       })
       .catch(() => {});
-    if (token) {
+  }, []);
+
+  // Fetch usage when billing panel opens or token changes
+  useEffect(() => {
+    if (token && showBilling) {
       fetch(`${API}/billing/usage`, {
         headers: { Authorization: `Bearer ${token}` },
       })
@@ -319,7 +323,7 @@ function ConsoleScreen({
         })
         .catch(() => {});
     }
-  }, [token]);
+  }, [token, showBilling]);
 
   // Health check
   useEffect(() => {
