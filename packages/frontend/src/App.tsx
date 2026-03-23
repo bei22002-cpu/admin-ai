@@ -20,6 +20,7 @@ import { CrudPages } from './pages/CrudPages';
 import { CrudPage } from './pages/CrudPage';
 import { ApiKeys } from './pages/ApiKeys';
 import { Settings } from './pages/Settings';
+import { OpenClawDashboard } from './pages/OpenClawDashboard';
 import { getThemeOptions } from './theme';
 import { ThemeContextType } from './types/theme';
 import { ProtectedRoute } from './components/ProtectedRoute';
@@ -51,11 +52,12 @@ export const App: React.FC = () => {
                               <Route path="/" element={<Navigate to="/dashboard" />} />
                               <Route path="/home" element={<Home />} />
                               <Route path="/dashboard" element={<Dashboard />} />
-                              <Route path="/ai/settings" element={<AISettings />} />
+                              <Route path="/ai-settings" element={<AISettings />} />
                               <Route path="/crud" element={<CrudPages />} />
                               <Route path="/crud/:id" element={<CrudPage />} />
                               <Route path="/api-keys" element={<ApiKeys />} />
                               <Route path="/settings" element={<Settings />} />
+                              <Route path="/openclaw" element={<OpenClawDashboard />} />
                               <Route path="/test-globe" element={<TestGlobe />} />
                             </Route>
                           </Routes>
@@ -71,4 +73,4 @@ export const App: React.FC = () => {
       </NotistackProvider>
     </ErrorBoundary>
   );
-}; 
+};  
