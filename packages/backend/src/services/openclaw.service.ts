@@ -70,6 +70,8 @@ export class OpenClawService extends EventEmitter {
 
   private constructor() {
     super();
+    // Load default skills immediately so they're available even without explicit initialize() call
+    this.loadDefaultSkills();
   }
 
   public static getInstance(): OpenClawService {
