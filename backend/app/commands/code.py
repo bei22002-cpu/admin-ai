@@ -1624,7 +1624,8 @@ async def _handle_repo(
     instructions = request["instructions"]
 
     # Phase 1: Scan the repo
-    await _emit_progress("Scanning repository structure…")
+    repo_label = os.path.basename(repo_path) or "repo"
+    _emit_progress(repo_label, "Scan", "Scanning repository structure...", 0.1)
     repo_context = _build_repo_context(repo_path)
 
     # Phase 2: Optional web research for unfamiliar topics
@@ -1634,11 +1635,11 @@ async def _handle_repo(
         "integration", "oauth", "graphql", "websocket",
     ]
     if any(kw in instructions.lower() for kw in research_keywords):
-        await _emit_progress("Researching documentation…")
+        _emit_progress(repo_label, "Research", "Researching documentation...", 0.2)
         research = await _web_research(f"{instructions} programming tutorial")
 
     # Phase 3: Ask AI to plan the changes
-    await _emit_progress("Planning changes to repository…")
+    _emit_progress(repo_label, "Plan", "Planning changes to repository...", 0.3)
     plan_prompt = f"""\
 You are modifying an EXISTING codebase. Here is the repository structure and
 key file contents:
@@ -1664,7 +1665,7 @@ Return ONLY the JSON array. No markdown fences, no prose.
     plan_raw = _strip_markdown_fences(plan_raw)
 
     # Phase 4: Parse and apply changes
-    await _emit_progress("Applying changes…")
+    _emit_progress(repo_label, "Apply", "Applying changes...", 0.6)
     try:
         changes = json.loads(plan_raw)
     except json.JSONDecodeError:
