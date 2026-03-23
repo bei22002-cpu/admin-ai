@@ -34,6 +34,14 @@ logger = logging.getLogger(__name__)
 _MAX_RETRIES = 5
 _RETRY_BASE_DELAY = 2.0  # seconds — doubles each retry
 
+# ─── Dual-Provider Collaboration ───────────────────────────────
+# Track when each provider was last rate-limited so we can route
+# requests to whichever provider is available.
+_provider_rate_limit_until: dict[str, float] = {
+    "openai": 0.0,
+    "anthropic": 0.0,
+}
+
 MAX_FIX_ATTEMPTS = 10
 MAX_FIX_ATTEMPTS_SIMPLE = 5
 OUTPUT_BASE = os.path.join(os.path.expanduser("~"), "mcp_generated")
@@ -142,23 +150,63 @@ def _get_ai_provider() -> str:
     return os.getenv("AI_PROVIDER", "openai").lower().strip()
 
 
+def _get_api_key(provider: str) -> str:
+    """Get the API key for a specific provider."""
+    if provider == "anthropic":
+        return os.getenv("ANTHROPIC_API_KEY", "")
+    return os.getenv("OPENAI_API_KEY", "")
+
+
+def _get_fallback_provider(primary: str) -> str | None:
+    """Return the other provider if its API key is configured, else None."""
+    other = "openai" if primary == "anthropic" else "anthropic"
+    key = _get_api_key(other)
+    if key and not key.startswith("your-"):
+        return other
+    return None
+
+
 async def _call_ai(
     messages: list[dict],
     api_key: str,
     max_tokens: int = 2500,
     use_heavy_model: bool = False,
 ) -> str:
-    """Send messages to the configured AI provider.
+    """Send messages to the configured AI provider with dual-provider failover.
 
-    Supports OpenAI and Anthropic (Claude).
-    Uses heavy models for complex tasks, light models for simple ones.
+    When both OPENAI_API_KEY and ANTHROPIC_API_KEY are set, hitting a rate
+    limit on one provider immediately fails over to the other instead of
+    waiting.  This effectively doubles throughput and eliminates most
+    backoff delays.
     """
-    provider = _get_ai_provider()
+    primary = _get_ai_provider()
+    fallback = _get_fallback_provider(primary)
+    now = time.time()
 
-    if provider == "anthropic":
-        return await _call_anthropic(messages, api_key, max_tokens, use_heavy_model)
-    else:
-        return await _call_openai(messages, api_key, max_tokens, use_heavy_model)
+    # If primary is still in cooldown and fallback is available, swap order
+    if fallback and _provider_rate_limit_until.get(primary, 0) > now:
+        if _provider_rate_limit_until.get(fallback, 0) <= now:
+            primary, fallback = fallback, primary
+            api_key = _get_api_key(primary)
+            logger.info("Primary provider in cooldown, routing to %s", primary)
+
+    # Try primary provider
+    call_fn = _call_anthropic if primary == "anthropic" else _call_openai
+    primary_key = _get_api_key(primary) or api_key
+    result = await call_fn(messages, primary_key, max_tokens, use_heavy_model)
+
+    # If primary hit rate limit and we have a fallback, try it immediately
+    if result.startswith("AI error: max retries exceeded") and fallback:
+        fallback_key = _get_api_key(fallback)
+        if fallback_key and not fallback_key.startswith("your-"):
+            logger.info(
+                "Provider %s exhausted retries, failing over to %s",
+                primary, fallback,
+            )
+            call_fn = _call_anthropic if fallback == "anthropic" else _call_openai
+            result = await call_fn(messages, fallback_key, max_tokens, use_heavy_model)
+
+    return result
 
 
 async def _call_openai(
@@ -192,6 +240,7 @@ async def _call_openai(
                     return data["choices"][0]["message"]["content"]
                 if response.status_code == 429:
                     delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                    _provider_rate_limit_until["openai"] = time.time() + delay
                     logger.warning("OpenAI rate limit hit, retrying in %.1fs (attempt %d/%d)", delay, attempt + 1, _MAX_RETRIES)
                     await asyncio.sleep(delay)
                     continue
@@ -208,6 +257,7 @@ async def _call_openai(
                     await asyncio.sleep(delay)
                     continue
                 return f"AI error (timeout after {_MAX_RETRIES} retries): {exc}"
+    _provider_rate_limit_until["openai"] = time.time() + 60
     return "AI error: max retries exceeded (rate limit)"
 
 
@@ -263,6 +313,7 @@ async def _call_anthropic(
                     return "\n".join(text_parts) if text_parts else "No response from AI."
                 if response.status_code == 429:
                     delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                    _provider_rate_limit_until["anthropic"] = time.time() + delay
                     logger.warning("Anthropic rate limit hit, retrying in %.1fs (attempt %d/%d)", delay, attempt + 1, _MAX_RETRIES)
                     await asyncio.sleep(delay)
                     continue
@@ -279,6 +330,7 @@ async def _call_anthropic(
                     await asyncio.sleep(delay)
                     continue
                 return f"AI error (timeout after {_MAX_RETRIES} retries): {exc}"
+    _provider_rate_limit_until["anthropic"] = time.time() + 60
     return "AI error: max retries exceeded (rate limit)"
 
 
