@@ -544,14 +544,25 @@ def _sandboxed_run(
         except (ValueError, OSError):
             pass  # some limits may not be supported on all platforms
 
-    return subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        cwd=cwd,
-        preexec_fn=_set_limits,
-    )
+    try:
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=cwd,
+            preexec_fn=_set_limits,
+        )
+    except Exception:
+        # Fallback: run without resource limits if preexec_fn fails
+        # (e.g. inside uvicorn async workers)
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=cwd,
+        )
 
 
 # ─── Code Execution ──────────────────────────────────────────────
