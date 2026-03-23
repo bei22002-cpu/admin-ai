@@ -52,6 +52,7 @@ PLANS: dict[str, dict[str, Any]] = {
         "features": [
             "local_ai",
             "cloud_ai",
+            "basic_commands",
             "code_generation",
             "code_review",
             "test_generation",
@@ -86,6 +87,7 @@ PLANS: dict[str, dict[str, Any]] = {
         "features": [
             "local_ai",
             "cloud_ai",
+            "basic_commands",
             "code_generation",
             "code_review",
             "test_generation",
