@@ -9,6 +9,8 @@ Autonomous code generation with:
 - Smart language detection and proper error diagnosis
 """
 
+import ast
+import asyncio
 import json
 import os
 import re
@@ -25,6 +27,22 @@ OUTPUT_BASE = os.path.join(os.path.expanduser("~"), "mcp_generated")
 MEMORY_FILE = os.path.join(OUTPUT_BASE, ".mcp_code_memory.json")
 EXEC_TIMEOUT = 120  # seconds
 EXEC_TIMEOUT_SIMPLE = 30  # seconds
+
+# ─── Progress Tracking (SSE) ────────────────────────────────────
+
+_progress_events: dict[str, list[dict]] = {}
+
+
+def _emit_progress(project_name: str, phase: str, detail: str, progress: float = 0.0) -> None:
+    """Emit a progress event for SSE streaming."""
+    if project_name not in _progress_events:
+        _progress_events[project_name] = []
+    _progress_events[project_name].append({
+        "phase": phase,
+        "detail": detail,
+        "progress": progress,
+        "timestamp": time.time(),
+    })
 
 # Complexity keywords — trigger the heavy pipeline
 COMPLEX_KEYWORDS = {
@@ -252,9 +270,13 @@ def _detect_language(code: str, request: str) -> tuple[str, str, str]:
     return ".py", "python3", "python"
 
 
-def _extract_imports(code: str, lang: str) -> list[str]:
-    """Extract third-party package names from import statements."""
+def _extract_imports(code: str, lang: str, project_dir: str = "") -> list[str]:
+    """Extract third-party package names from import statements.
+
+    If project_dir is provided, filters out local project modules.
+    """
     packages: list[str] = []
+    local_modules = _get_project_local_modules(project_dir) if project_dir else set()
     stdlib = {
         "os", "sys", "re", "json", "math", "time", "datetime", "random",
         "collections", "itertools", "functools", "pathlib", "subprocess",
@@ -277,11 +299,11 @@ def _extract_imports(code: str, lang: str) -> list[str]:
             line = line.strip()
             if line.startswith("import "):
                 pkg = line.split()[1].split(".")[0]
-                if pkg not in stdlib:
+                if pkg not in stdlib and pkg not in local_modules:
                     packages.append(pkg)
             elif line.startswith("from "):
                 pkg = line.split()[1].split(".")[0]
-                if pkg not in stdlib:
+                if pkg not in stdlib and pkg not in local_modules:
                     packages.append(pkg)
     elif lang == "javascript":
         for match in re.findall(r'require\(["\']([^"\']+)["\']\)', code):
@@ -486,6 +508,121 @@ def _read_project_files(project_dir: str) -> str:
                 continue
 
     return "\n\n".join(context_parts)
+
+
+def _get_project_local_modules(project_dir: str) -> set[str]:
+    """Get set of module names that are local project files (not PyPI packages)."""
+    local_modules: set[str] = set()
+    if not project_dir or not os.path.isdir(project_dir):
+        return local_modules
+    for root, dirs, files in os.walk(project_dir):
+        if "__pycache__" in root:
+            continue
+        for fname in files:
+            if fname.endswith(".py"):
+                local_modules.add(fname[:-3])  # e.g., "board" from "board.py"
+        for d in dirs:
+            init_path = os.path.join(root, d, "__init__.py")
+            if os.path.exists(init_path):
+                local_modules.add(d)
+    return local_modules
+
+
+def _extract_signatures(code: str) -> str:
+    """Extract class/function signatures from Python code using AST.
+
+    Returns a compact representation of the module's public API —
+    much smaller than full source but preserves interface info for context.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        # If code doesn't parse, fall back to truncation
+        return code[:2000]
+
+    lines: list[str] = []
+
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            try:
+                lines.append(ast.unparse(node))
+            except Exception:
+                pass
+        elif isinstance(node, ast.ClassDef):
+            bases_str = ", ".join(
+                ast.unparse(b) for b in node.bases
+            ) if node.bases else ""
+            class_line = (
+                f"class {node.name}({bases_str}):"
+                if bases_str
+                else f"class {node.name}:"
+            )
+            lines.append(class_line)
+            # Docstring
+            if (
+                node.body
+                and isinstance(node.body[0], ast.Expr)
+                and isinstance(node.body[0].value, ast.Constant)
+                and isinstance(node.body[0].value.value, str)
+            ):
+                doc = node.body[0].value.value.split("\n")[0][:120]
+                lines.append(f'    """{doc}"""')
+            # Method signatures
+            for item in node.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    try:
+                        args_str = ast.unparse(item.args)
+                        ret = f" -> {ast.unparse(item.returns)}" if item.returns else ""
+                        lines.append(f"    def {item.name}({args_str}){ret}: ...")
+                    except Exception:
+                        lines.append(f"    def {item.name}(...): ...")
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            try:
+                args_str = ast.unparse(node.args)
+                ret = f" -> {ast.unparse(node.returns)}" if node.returns else ""
+                lines.append(f"def {node.name}({args_str}){ret}: ...")
+            except Exception:
+                lines.append(f"def {node.name}(...): ...")
+        elif isinstance(node, ast.Assign):
+            # Top-level constants
+            try:
+                line = ast.unparse(node)
+                if len(line) < 200:
+                    lines.append(line)
+            except Exception:
+                pass
+
+    return "\n".join(lines) if lines else code[:2000]
+
+
+def _git_init_and_commit(project_dir: str, message: str) -> bool:
+    """Initialize git repo (if needed) and commit current state."""
+    try:
+        git_dir = os.path.join(project_dir, ".git")
+        if not os.path.isdir(git_dir):
+            subprocess.run(
+                ["git", "init"], cwd=project_dir,
+                capture_output=True, timeout=10,
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "mcp@grid.local"],
+                cwd=project_dir, capture_output=True, timeout=5,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "MCP Grid"],
+                cwd=project_dir, capture_output=True, timeout=5,
+            )
+        subprocess.run(
+            ["git", "add", "-A"], cwd=project_dir,
+            capture_output=True, timeout=10,
+        )
+        result = subprocess.run(
+            ["git", "commit", "-m", message, "--allow-empty"],
+            cwd=project_dir, capture_output=True, text=True, timeout=10,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 
 
 # ─── System Prompts ──────────────────────────────────────────────
@@ -729,6 +866,26 @@ SYSTEM_PROMPT_POLISH = textwrap.dedent("""\
     - Dependencies list
     - Project structure tree
     - Keep it concise but professional — like a real GitHub README.\
+""")
+
+SYSTEM_PROMPT_TEST = textwrap.dedent("""\
+    You are MCP, an elite autonomous AI test engineer.
+    Generate unit tests for the given project.
+
+    Rules:
+    - Return ONLY the test code. No markdown fences, no prose.
+    - Use Python's built-in unittest module.
+    - Import the project modules being tested.
+    - Test all public functions and methods.
+    - Include edge cases and error cases.
+    - Each test method should have a descriptive name.
+    - Tests must be runnable with: python -m unittest test_project.py
+    - Add setUp/tearDown if needed for database or file cleanup.
+    - Mock external dependencies if needed (use unittest.mock).
+    - Tests should be independent of each other.
+    - Include at least 5 test methods.
+    - Do NOT use pytest — only unittest.
+    - NEVER use input() or interactive prompts.\
 """)
 
 
@@ -1278,14 +1435,13 @@ async def _build_single_module(
     api_key: str,
 ) -> str:
     """Phase 2: Generate a single module with full context of plan and built modules."""
-    # Build context of already-built modules
+    # Build context of already-built modules using AST signatures (improvement #5)
     built_context = ""
     if built_modules:
-        built_context = "\n\nAlready built modules:\n"
+        built_context = "\n\nAlready built modules (API signatures):\n"
         for path, code in built_modules.items():
-            # Truncate very long modules for context
-            truncated = code[:3000] if len(code) > 3000 else code
-            built_context += f"\n--- {path} ---\n{truncated}\n"
+            signatures = _extract_signatures(code)
+            built_context += f"\n--- {path} ---\n{signatures}\n"
 
     plan_summary = (
         f"Project: {args}\n"
@@ -1455,6 +1611,125 @@ def _cross_file_fix_loop(
     return run_success, output, error, install_log
 
 
+async def _generate_tests(
+    project_dir: str, args: str, api_key: str
+) -> tuple[str, bool, str]:
+    """Phase 5.5: Generate and run unit tests.
+
+    Returns (test_file_path, tests_passed, test_output).
+    """
+    project_code = _read_project_files(project_dir)
+    if not project_code:
+        return "", False, "No project code to test"
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT_TEST},
+        {"role": "user", "content": (
+            f"Project: {args}\n\n"
+            f"Project source code:\n{project_code}\n\n"
+            f"Generate comprehensive unit tests for this project."
+        )},
+    ]
+
+    raw_tests = await _call_ai(
+        messages, api_key, max_tokens=4000, use_heavy_model=True
+    )
+    test_code = _strip_markdown_fences(raw_tests)
+
+    test_path = os.path.join(project_dir, "test_project.py")
+    with open(test_path, "w") as f:
+        f.write(test_code)
+
+    # Run tests with unittest
+    try:
+        result = subprocess.run(
+            ["python3", "-m", "unittest", test_path, "-v"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=project_dir,
+        )
+        passed = result.returncode == 0
+        output = (result.stdout[:2000] + "\n" + result.stderr[:1000]).strip()
+        return test_path, passed, output
+    except subprocess.TimeoutExpired:
+        return test_path, False, "Tests timed out (60s)"
+    except Exception as e:
+        return test_path, False, f"Test execution failed: {e}"
+
+
+async def _build_modules_parallel(
+    build_order: list[str],
+    component_specs: dict[str, str],
+    plan_data: dict,
+    project_dir: str,
+    args: str,
+    api_key: str,
+    project_name: str,
+) -> tuple[dict[str, str], list[str]]:
+    """Build modules in parallel tiers for speed.
+
+    Splits the build order into tiers:
+      Tier 0: first half of modules (foundations — typically independent)
+      Tier 1: second half of modules (services — may depend on foundations)
+      Tier 2: entry point (main.py — depends on everything)
+
+    Modules within a tier are built concurrently with asyncio.gather.
+    Each tier gets the context (signatures) of all previously-built tiers.
+    """
+    built_modules: dict[str, str] = {}
+    file_list: list[str] = []
+    entry_point = plan_data.get("entry_point", "main.py")
+
+    # Split into tiers
+    non_entry = [f for f in build_order if f != entry_point]
+    split = max(1, len(non_entry) // 2)
+    tiers = [non_entry[:split], non_entry[split:]]
+    if entry_point in build_order:
+        tiers.append([entry_point])
+
+    for tier_idx, tier in enumerate(tiers):
+        if not tier:
+            continue
+
+        _emit_progress(
+            project_name, "Phase 2",
+            f"Building tier {tier_idx + 1}/{len(tiers)} ({len(tier)} modules: {', '.join(tier)})...",
+            0.15 + (tier_idx * 0.15),
+        )
+
+        # Snapshot context for this tier (modules from previous tiers only)
+        tier_context = dict(built_modules)
+
+        async def _build_one(module_file: str, ctx: dict[str, str]) -> tuple[str, str]:
+            spec = component_specs.get(module_file, f"Module: {module_file}")
+            code = await _build_single_module(
+                module_file, spec, plan_data, ctx, args, api_key
+            )
+            return module_file, code
+
+        tasks = [_build_one(mf, tier_context) for mf in tier]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for result in results:
+            if isinstance(result, BaseException):
+                continue
+            module_file, module_code = result
+
+            safe_path = os.path.normpath(module_file).lstrip("/").lstrip("../")
+            filepath = os.path.join(project_dir, safe_path)
+            if not filepath.startswith(project_dir):
+                continue
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            with open(filepath, "w") as f:
+                f.write(module_code)
+
+            built_modules[module_file] = module_code
+            file_list.append(module_file)
+
+    return built_modules, file_list
+
+
 # ─── Multi-File Project (Iterative Devin-like Pipeline) ─────────
 
 
@@ -1466,20 +1741,27 @@ async def _handle_project(
 ) -> dict:
     """Generate a multi-file project using an iterative Devin-like pipeline.
 
-    5-phase process for complex projects:
-      Phase 1: Deep architecture planning with module specs and build order
-      Phase 2: Module-by-module building (each module built with context of others)
-      Phase 3: Integration testing and cross-file error fixing
-      Phase 4: Self-review — AI reviews its own code and applies improvements
-      Phase 5: Polish — generate README, improve demo output
+    Enhanced 6-phase process for complex projects:
+      Phase 1:   Deep architecture planning with module specs and build order
+      Phase 2:   Parallel tiered module building (each tier with full context)
+      Phase 3:   Integration testing and cross-file error fixing
+      Phase 4:   Self-review & improvement with rollback safety net
+      Phase 5:   Quality gate — retry review+improve if score < 5
+      Phase 5.5: Auto-generate and run unit tests
+      Phase 6:   Polish — generate README, improve demo output
+      Git:       Auto-init repo, commit after each phase
+      SSE:       Emit progress events for real-time streaming
     """
     complex_mode = _is_complex(args)
     max_fix = MAX_FIX_ATTEMPTS if complex_mode else MAX_FIX_ATTEMPTS_SIMPLE
     exec_timeout = EXEC_TIMEOUT if complex_mode else EXEC_TIMEOUT_SIMPLE
 
+    _emit_progress(project_name, "Init", "Starting iterative pipeline...", 0.0)
+
     # ────────────────────────────────────────────────────────────
     # PHASE 1: Architecture Planning
     # ────────────────────────────────────────────────────────────
+    _emit_progress(project_name, "Phase 1", "Generating architecture plan...", 0.05)
     plan_data = None
     if complex_mode:
         plan_data = await _generate_detailed_plan(args, api_key)
@@ -1490,6 +1772,10 @@ async def _handle_project(
 
     project_dir = os.path.join(OUTPUT_BASE, project_name)
     os.makedirs(project_dir, exist_ok=True)
+
+    # Enhancement #8: Git integration — init repo
+    _git_init_and_commit(project_dir, "Initial commit (empty project)")
+    _emit_progress(project_name, "Phase 1", "Architecture plan complete.", 0.10)
 
     # Build component spec lookup
     component_specs: dict[str, str] = {}
@@ -1510,31 +1796,18 @@ async def _handle_project(
         ):
             build_order.insert(0, cf)
 
+    # Git commit after Phase 1
+    _git_init_and_commit(project_dir, "Phase 1: Architecture plan")
+
     # ────────────────────────────────────────────────────────────
-    # PHASE 2: Module-by-Module Building
+    # PHASE 2: Parallel Tiered Module Building  (Enhancement #4)
     # ────────────────────────────────────────────────────────────
-    built_modules: dict[str, str] = {}
-    file_list: list[str] = []
+    _emit_progress(project_name, "Phase 2", "Building modules in parallel tiers...", 0.15)
 
-    for module_file in build_order:
-        spec = component_specs.get(module_file, f"Module: {module_file}")
-
-        # Generate this module with context of all previously built modules
-        module_code = await _build_single_module(
-            module_file, spec, plan_data, built_modules, args, api_key
-        )
-
-        # Save the module
-        safe_path = os.path.normpath(module_file).lstrip("/").lstrip("../")
-        filepath = os.path.join(project_dir, safe_path)
-        if not filepath.startswith(project_dir):
-            continue
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        with open(filepath, "w") as f:
-            f.write(module_code)
-
-        built_modules[module_file] = module_code
-        file_list.append(module_file)
+    built_modules, file_list = await _build_modules_parallel(
+        build_order, component_specs, plan_data,
+        project_dir, args, api_key, project_name,
+    )
 
     # Generate requirements.txt if not already built
     if "requirements.txt" not in file_list:
@@ -1545,12 +1818,17 @@ async def _handle_project(
                 f.write("\n".join(deps))
             file_list.append("requirements.txt")
 
+    _emit_progress(project_name, "Phase 2", f"Built {len(file_list)} modules.", 0.45)
+    # Git commit after Phase 2
+    _git_init_and_commit(project_dir, f"Phase 2: Built {len(file_list)} modules")
+
     # ────────────────────────────────────────────────────────────
     # PHASE 3: Integration Testing & Cross-File Fixing
     # ────────────────────────────────────────────────────────────
+    _emit_progress(project_name, "Phase 3", "Running integration tests...", 0.50)
+
     entry_path = os.path.join(project_dir, entry_point)
     if not os.path.exists(entry_path):
-        # Try to find any main/app file
         for candidate in ["main.py", "app.py", "index.py"]:
             cp = os.path.join(project_dir, candidate)
             if os.path.exists(cp):
@@ -1562,15 +1840,16 @@ async def _handle_project(
     run_success = False
     lang = "python"
     install_log = ""
+    interpreter = "python3"
 
     if os.path.exists(entry_path):
         with open(entry_path) as f:
             entry_code = f.read()
         ext, interpreter, lang = _detect_language(entry_code, args)
 
-        # Auto-install deps from ALL project files
+        # Enhancement #2: Auto-install deps with local module filtering
         all_code = _read_project_files(project_dir)
-        packages = _extract_imports(all_code, lang)
+        packages = _extract_imports(all_code, lang, project_dir)
         install_log = _auto_install_deps(packages, lang, project_dir)
 
         # Initial run
@@ -1583,11 +1862,14 @@ async def _handle_project(
         fix_attempt = 0
         while not run_success and fix_attempt < max_fix:
             fix_attempt += 1
+            _emit_progress(
+                project_name, "Phase 3",
+                f"Fix attempt {fix_attempt}/{max_fix}...",
+                0.50 + (fix_attempt * 0.02),
+            )
 
-            # Read ALL project files for full context when fixing
             project_context = _read_project_files(project_dir)
 
-            # Detect which file has the error
             error_file = entry_path
             error_match = re.search(r'File "([^"]+)", line \d+', error)
             if error_match:
@@ -1618,8 +1900,8 @@ async def _handle_project(
             with open(error_file, "w") as f:
                 f.write(fixed_code)
 
-            # Check for new deps
-            new_packages = _extract_imports(fixed_code, lang)
+            # Enhancement #2: local module filtering for newly-extracted imports
+            new_packages = _extract_imports(fixed_code, lang, project_dir)
             new_deps = [p for p in new_packages if p not in packages]
             if new_deps:
                 dep_log = _auto_install_deps(new_deps, lang, project_dir)
@@ -1631,25 +1913,64 @@ async def _handle_project(
                 entry_path, interpreter, timeout=exec_timeout
             )
 
+    _emit_progress(
+        project_name, "Phase 3",
+        f"Integration testing {'passed' if run_success else 'completed with issues'}.",
+        0.60,
+    )
+    # Git commit after Phase 3
+    _git_init_and_commit(project_dir, f"Phase 3: Integration testing ({'pass' if run_success else 'issues'})")
+
     # ────────────────────────────────────────────────────────────
-    # PHASE 4: Self-Review & Improvement
+    # PHASE 4: Self-Review & Improvement  (Enhancement #1: rollback)
     # ────────────────────────────────────────────────────────────
     review_data = None
     quality_score = 0
-    if complex_mode:
-        review_data = await _review_project(project_dir, args, api_key)
+    review_round = 0
+    max_review_rounds = 2  # Enhancement #6: quality gate allows up to 2 rounds
 
-        if review_data:
+    if complex_mode:
+        while review_round < max_review_rounds:
+            review_round += 1
+            _emit_progress(
+                project_name, "Phase 4",
+                f"Self-review round {review_round}...",
+                0.62 + (review_round * 0.05),
+            )
+
+            review_data = await _review_project(project_dir, args, api_key)
+            if not review_data:
+                break
+
             quality_score = review_data.get("quality_score", 0)
             files_to_rewrite = review_data.get("files_to_rewrite", [])
 
-            # Improve modules that need it (limit to 5 to avoid excessive API calls)
+            # Enhancement #6: quality gate — skip improvement if score >= 5
+            if quality_score >= 5 and review_round > 1:
+                _emit_progress(
+                    project_name, "Phase 4",
+                    f"Quality score {quality_score}/10 — above threshold, skipping re-improvement.",
+                    0.72,
+                )
+                break
+
+            if not files_to_rewrite:
+                break
+
+            # Enhancement #1: Rollback safety net — backup before Phase 4 rewrites
+            backup_dir = project_dir + ".backup"
+            try:
+                if os.path.exists(backup_dir):
+                    shutil.rmtree(backup_dir)
+                shutil.copytree(project_dir, backup_dir)
+            except Exception:
+                backup_dir = ""  # skip rollback if backup failed
+
+            # Improve modules that need it (limit to 5 per round)
             improved_count = 0
             for rewrite_file in files_to_rewrite[:5]:
-                # Find the full path
                 rewrite_path = os.path.join(project_dir, rewrite_file)
                 if not os.path.exists(rewrite_path):
-                    # Try without subdirectory
                     for root, _dirs, files in os.walk(project_dir):
                         if rewrite_file in files:
                             rewrite_path = os.path.join(root, rewrite_file)
@@ -1663,50 +1984,90 @@ async def _handle_project(
                         f.write(improved_code)
                     improved_count += 1
 
-            # Re-run after improvements
+            # Re-run after improvements to check if rewrites broke code
+            rewrite_broke_code = False
             if improved_count > 0 and os.path.exists(entry_path):
-                run_success, output, error = _run_code(
+                run_success_after, output_after, error_after = _run_code(
                     entry_path, interpreter, timeout=exec_timeout
                 )
 
-                # One more fix attempt if improvements broke something
-                if not run_success:
-                    project_context = _read_project_files(project_dir)
-                    error_file = entry_path
-                    error_match = re.search(r'File "([^"]+)", line \d+', error)
-                    if error_match:
-                        matched_path = error_match.group(1)
-                        if matched_path.startswith(project_dir):
-                            error_file = matched_path
+                if not run_success_after:
+                    # Enhancement #1: Rollback if rewrites broke previously-working code
+                    if backup_dir and os.path.isdir(backup_dir):
+                        _emit_progress(
+                            project_name, "Phase 4",
+                            "Rewrite broke code — rolling back to backup...",
+                            0.70,
+                        )
+                        try:
+                            shutil.rmtree(project_dir)
+                            shutil.copytree(backup_dir, project_dir)
+                            rewrite_broke_code = True
+                            # Restore previous run state
+                            run_success_after, output_after, error_after = _run_code(
+                                entry_path, interpreter, timeout=exec_timeout
+                            )
+                        except Exception:
+                            pass  # rollback failed, keep broken state
 
-                    with open(error_file) as f:
-                        current_code = f.read()
+                output = output_after
+                error = error_after
+                run_success = run_success_after
 
-                    fix_messages = [
-                        {"role": "system", "content": SYSTEM_PROMPT_FIX},
-                        {"role": "user", "content": (
-                            f"Project: {args}\n"
-                            f"ALL project files:\n{project_context}\n\n"
-                            f"File with error ({os.path.relpath(error_file, project_dir)}):\n"
-                            f"```\n{current_code}\n```\n\n"
-                            f"Error:\n```\n{error}\n```\n\n"
-                            f"Fix the file. Return the complete fixed file."
-                        )},
-                    ]
-                    raw_fix = await _call_ai(
-                        fix_messages, api_key, max_tokens=4000, use_heavy_model=True
-                    )
-                    fixed_code = _strip_markdown_fences(raw_fix)
-                    with open(error_file, "w") as f:
-                        f.write(fixed_code)
-                    run_success, output, error = _run_code(
-                        entry_path, interpreter, timeout=exec_timeout
-                    )
+            # Cleanup backup
+            if backup_dir and os.path.isdir(backup_dir):
+                try:
+                    shutil.rmtree(backup_dir)
+                except Exception:
+                    pass
+
+            if rewrite_broke_code:
+                _emit_progress(
+                    project_name, "Phase 4",
+                    "Rolled back — skipping further improvements.",
+                    0.72,
+                )
+                break
+
+            # Enhancement #6: quality gate — if score < 5, loop for another round
+            if quality_score >= 5:
+                break
+
+    _emit_progress(
+        project_name, "Phase 4",
+        f"Review complete (score: {quality_score}/10).",
+        0.75,
+    )
+    # Git commit after Phase 4
+    _git_init_and_commit(project_dir, f"Phase 4: Self-review (score: {quality_score}/10)")
 
     # ────────────────────────────────────────────────────────────
-    # PHASE 5: Polish (README + final touches)
+    # PHASE 5.5: Test Generation  (Enhancement #7)
+    # ────────────────────────────────────────────────────────────
+    test_path = ""
+    tests_passed = False
+    test_output = ""
+    if complex_mode:
+        _emit_progress(project_name, "Phase 5.5", "Generating unit tests...", 0.78)
+        test_path, tests_passed, test_output = await _generate_tests(
+            project_dir, args, api_key
+        )
+        if test_path:
+            if "test_project.py" not in file_list:
+                file_list.append("test_project.py")
+        _emit_progress(
+            project_name, "Phase 5.5",
+            f"Tests {'passed' if tests_passed else 'generated (some failures)'}.",
+            0.82,
+        )
+        # Git commit after Phase 5.5
+        _git_init_and_commit(project_dir, f"Phase 5.5: Tests ({'pass' if tests_passed else 'fail'})")
+
+    # ────────────────────────────────────────────────────────────
+    # PHASE 6: Polish (README + final touches)
     # ────────────────────────────────────────────────────────────
     if complex_mode:
+        _emit_progress(project_name, "Phase 6", "Generating README...", 0.85)
         readme_content = await _generate_readme(
             project_dir, args, output or "", api_key
         )
@@ -1715,6 +2076,10 @@ async def _handle_project(
             f.write(readme_content)
         if "README.md" not in file_list:
             file_list.append("README.md")
+        # Git commit after Phase 6
+        _git_init_and_commit(project_dir, "Phase 6: README and polish")
+
+    _emit_progress(project_name, "Complete", "Pipeline finished.", 1.0)
 
     # ────────────────────────────────────────────────────────────
     # Final: Record + Report
@@ -1738,11 +2103,13 @@ async def _handle_project(
         model_used = "gpt-4o" if complex_mode else "gpt-4o-mini"
 
     # Build pipeline summary
-    pipeline_phases = ["Architecture Planning", "Module-by-Module Build"]
+    pipeline_phases = ["Architecture Planning", "Parallel Module Build"]
     if run_success or error:
         pipeline_phases.append("Integration Testing")
     if review_data:
         pipeline_phases.append(f"Self-Review (score: {quality_score}/10)")
+    if test_path:
+        pipeline_phases.append(f"Tests ({'pass' if tests_passed else 'fail'})")
     if complex_mode:
         pipeline_phases.append("Polish & README")
 
@@ -1765,6 +2132,8 @@ async def _handle_project(
             "complex_mode": complex_mode,
             "pipeline": " → ".join(pipeline_phases),
             "quality_score": quality_score if review_data else "N/A",
+            "tests_passed": tests_passed if test_path else "N/A",
+            "test_output": test_output[:500] if test_output else "",
             "architecture_plan": plan_data.get("architecture", "") if plan_data else "",
             "output": output[:2000] if output else "",
             "error": error[:1000] if error else "",
@@ -1810,7 +2179,7 @@ async def _handle_project_oneshot(
         code = _strip_markdown_fences(raw_response)
         ext, interpreter, lang = _detect_language(code, args)
         filepath = _save_code(code, project_name, ext)
-        packages = _extract_imports(code, lang)
+        packages = _extract_imports(code, lang, os.path.dirname(filepath))
         install_log = _auto_install_deps(packages, lang, os.path.dirname(filepath))
         success, stdout, stderr = _run_code(filepath, interpreter, timeout=exec_timeout)
         _add_to_memory(args, filepath, lang, success)
@@ -1847,7 +2216,7 @@ async def _handle_project_oneshot(
         ext, interpreter, lang = _detect_language(entry_code, args)
 
         all_code = _read_project_files(project_dir)
-        packages = _extract_imports(all_code, lang)
+        packages = _extract_imports(all_code, lang, project_dir)
         install_log = _auto_install_deps(packages, lang, project_dir)
         run_success, output, error = _run_code(entry_path, interpreter, timeout=exec_timeout)
 
@@ -1895,7 +2264,7 @@ async def _handle_project_oneshot(
             with open(error_file, "w") as f:
                 f.write(fixed_code)
 
-            new_packages = _extract_imports(fixed_code, lang)
+            new_packages = _extract_imports(fixed_code, lang, project_dir)
             new_deps = [p for p in new_packages if p not in packages]
             if new_deps:
                 dep_log = _auto_install_deps(new_deps, lang, project_dir)

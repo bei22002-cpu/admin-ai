@@ -1,5 +1,6 @@
 """MCP Grid Backend - TRON-themed AI Desktop Assistant API."""
 
+import asyncio
 import os
 import time
 from contextlib import asynccontextmanager
@@ -8,6 +9,7 @@ from typing import AsyncGenerator
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.commands import (
@@ -19,6 +21,7 @@ from app.commands import (
     handle_scan,
     handle_search,
 )
+from app.commands.code import _progress_events
 from app.utils.phase_manager import PhaseManager
 from app.voice.tts import speak_response
 
@@ -184,6 +187,61 @@ async def text_to_speech(request: CommandRequest) -> dict[str, str]:
     """Generate TRON-style TTS audio."""
     result = await speak_response(request.command)
     return result
+
+
+# ─── SSE Streaming Endpoint (Enhancement #3) ────────────────────
+
+
+class StreamRequest(BaseModel):
+    project_name: str
+
+
+@app.post("/command/stream")
+async def command_stream(request: StreamRequest) -> StreamingResponse:
+    """Stream pipeline progress events via Server-Sent Events.
+
+    The frontend polls this endpoint to get real-time phase updates
+    while a complex code generation pipeline is running.
+    """
+    project = request.project_name
+
+    async def event_generator() -> AsyncGenerator[str, None]:
+        sent = 0
+        idle_count = 0
+        max_idle = 300  # 5 minutes of no new events → close stream
+
+        while idle_count < max_idle:
+            events = _progress_events.get(project, [])
+            if sent < len(events):
+                for evt in events[sent:]:
+                    data = (
+                        f'{{"phase":"{evt["phase"]}",'
+                        f'"detail":"{evt["detail"]}",'
+                        f'"progress":{evt["progress"]},'
+                        f'"timestamp":{evt["timestamp"]}}}'
+                    )
+                    yield f"data: {data}\n\n"
+                sent = len(events)
+                idle_count = 0
+
+                # If pipeline is complete, close the stream
+                if events and events[-1]["phase"] == "Complete":
+                    yield 'data: {"phase":"Complete","detail":"Stream closed.","progress":1.0}\n\n'
+                    break
+            else:
+                idle_count += 1
+
+            await asyncio.sleep(1)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ─── WebSocket for real-time communication ───────────────────────
