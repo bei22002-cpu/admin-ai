@@ -22,6 +22,7 @@ import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
 import { ArrayContains } from 'typeorm';
 import { WebSocketEvents } from '@admin-ai/shared/src/types/websocket';
+import { OpenClawService, getOpenClawService } from './openclaw.service';
 
 const aiSettingsRepository = AppDataSource.getRepository('AISettings');
 
@@ -98,14 +99,18 @@ export class AIService extends EventEmitter {
     systemCommands: []
   };
 
+  private openClawService: OpenClawService | null = null;
+
   private llmClients: {
     openai: OpenAI | undefined;
     gemini: GoogleGenerativeAI | undefined;
     anthropic: Anthropic | undefined;
+    openclaw: OpenClawService | undefined;
   } = {
     openai: undefined,
     gemini: undefined,
-    anthropic: undefined
+    anthropic: undefined,
+    openclaw: undefined
   };
 
   /**
@@ -319,6 +324,14 @@ Generate a response that:
           this.anthropic = new Anthropic({ apiKey });
           this.llmClients.anthropic = this.anthropic;
           break;
+        case 'openclaw':
+          this.openClawService = getOpenClawService();
+          await this.openClawService.initialize({ gatewayUrl: apiKey, enabled: true });
+          if (this.webSocketService) {
+            this.openClawService.setWebSocketService(this.webSocketService);
+          }
+          this.llmClients.openclaw = this.openClawService;
+          break;
         default:
           throw new Error(`Unsupported provider: ${provider}`);
       }
@@ -483,6 +496,11 @@ Generate a response that:
             messages: [{ role: 'user', content }]
           });
           responseContent = anthropicResponse.content[0]?.text || 'No response generated';
+          break;
+
+        case 'openclaw':
+          const openClawSvc = llmClient as OpenClawService;
+          responseContent = await openClawSvc.sendMessage(content, userId);
           break;
           
         default:

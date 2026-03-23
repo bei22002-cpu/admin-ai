@@ -5,6 +5,7 @@ import { createAIRoutes } from './ai.routes';
 import { createMetricsRoutes } from './metrics.routes';
 import { createSettingsRoutes } from './settings.routes';
 import { createApiKeysRoutes } from './apiKeys.routes';
+import { createOpenClawRoutes } from './openclaw.routes';
 
 export function createRoutes(wsService: WebSocketService) {
   const router = Router();
@@ -15,6 +16,7 @@ export function createRoutes(wsService: WebSocketService) {
   router.use('/metrics', createMetricsRoutes(wsService));
   router.use('/settings', createSettingsRoutes(wsService));
   router.use('/api-keys', createApiKeysRoutes(wsService));
+  router.use('/openclaw', createOpenClawRoutes());
 
   return router;
-} 
+}  

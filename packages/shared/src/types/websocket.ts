@@ -222,4 +222,27 @@ export interface WebSocketEvents {
       timestamp: string;
     };
   };
+
+  // OpenClaw events
+  'openclaw:status': {
+    connected: boolean;
+    gatewayUrl: string;
+    activeSkills: number;
+    totalSkills: number;
+    lastHeartbeat?: string;
+    channels: string[];
+  };
+  'openclaw:skill:executed': {
+    skillId: string;
+    skillName: string;
+    actionId: string;
+    actionName: string;
+    success: boolean;
+    timestamp: string;
+  };
+  'openclaw:message': {
+    content: string;
+    source: string;
+    timestamp: string;
+  };
 }

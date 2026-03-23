@@ -18,6 +18,7 @@ import {
   Psychology as AIIcon,
   Key as KeyIcon,
   SettingsInputComponent as SettingsInputComponentIcon,
+  SmartToy as OpenClawIcon,
 } from '@mui/icons-material';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Link } from 'react-router-dom';
@@ -37,6 +38,7 @@ const menuItems: MenuItem[] = [
   { text: 'AI Dashboard', icon: <AIIcon />, path: '/ai' },
   { text: 'API Keys', icon: <KeyIcon />, path: '/api-keys' },
   { text: 'CRUD Pages', icon: <StorageIcon />, path: '/crud' },
+  { text: 'OpenClaw', icon: <OpenClawIcon />, path: '/openclaw' },
   { text: 'Settings', icon: <SettingsIcon />, path: '/settings' },
   { text: 'WebSocket Test', icon: <SettingsInputComponentIcon />, path: '/websocket-test' },
 ];
@@ -147,4 +149,4 @@ export const Sidebar: React.FC = () => {
       </List>
     </Drawer>
   );
-}; 
+};  

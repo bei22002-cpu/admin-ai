@@ -13,6 +13,7 @@ import { Login } from '../pages/Login';
 import Register from '../pages/Register';
 import SystemStatus from '../pages/SystemStatus';
 import CrudPageItems from '../pages/CrudPageItems';
+import { OpenClawDashboard } from '../pages/OpenClawDashboard';
 
 const routes = [
   {
@@ -26,6 +27,7 @@ const routes = [
       { path: '/api-keys', element: <ApiKeys /> },
       { path: '/crud-pages', element: <CrudPages /> },
       { path: '/crud-pages/:id', element: <CrudPage /> },
+      { path: '/openclaw', element: <OpenClawDashboard /> },
       { path: '*', element: <Navigate to="/" /> },
     ],
   },
@@ -45,4 +47,4 @@ export const AppRoutes: React.FC = () => {
   );
 };
 
-export default routes; 
+export default routes;  
