@@ -386,15 +386,49 @@ def _extract_imports(code: str, lang: str, project_dir: str = "") -> list[str]:
 
 
 def _parse_multi_file(ai_response: str) -> dict | None:
-    """Try to parse AI response as multi-file project structure."""
+    """Try to parse AI response as multi-file project structure.
+
+    Handles truncated JSON by extracting individual complete file entries
+    even when the overall JSON is malformed (e.g., cut off by max_tokens).
+    """
+    text = _strip_markdown_fences(ai_response).strip()
+
+    # Attempt 1: full JSON parse
     try:
-        json_match = re.search(r"\{[\s\S]*\"files\"[\s\S]*\}", ai_response)
+        json_match = re.search(r"\{[\s\S]*\"files\"[\s\S]*\}", text)
         if json_match:
             data = json.loads(json_match.group())
-            if "files" in data and isinstance(data["files"], list):
+            if "files" in data and isinstance(data["files"], list) and data["files"]:
                 return data
     except (json.JSONDecodeError, AttributeError):
         pass
+
+    # Attempt 2: salvage complete file entries from truncated JSON
+    if '"files"' in text and '"path"' in text and '"content"' in text:
+        salvaged_files: list[dict] = []
+        # Find each {"path": ..., "content": ...} object
+        file_pattern = re.compile(
+            r'\{\s*"path"\s*:\s*"([^"]+)"\s*,\s*"content"\s*:\s*"((?:[^"\\]|\\.)*)"\s*\}',
+            re.DOTALL,
+        )
+        for m in file_pattern.finditer(text):
+            path = m.group(1)
+            # Unescape the content string
+            try:
+                content = json.loads('"' + m.group(2) + '"')
+            except json.JSONDecodeError:
+                content = m.group(2).replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"')
+            salvaged_files.append({"path": path, "content": content})
+
+        if salvaged_files:
+            # Try to extract entry_point from the text
+            ep_match = re.search(r'"entry_point"\s*:\s*"([^"]+)"', text)
+            entry_point = ep_match.group(1) if ep_match else "main.py"
+            return {
+                "files": salvaged_files,
+                "entry_point": entry_point,
+            }
+
     return None
 
 
@@ -1943,26 +1977,45 @@ async def _generate_detailed_plan(
     raw_plan = await _call_ai(
         plan_messages, api_key, max_tokens=3000, use_heavy_model=True
     )
-    try:
-        plan_match = re.search(r"\{[\s\S]*\}", raw_plan)
-        if plan_match:
-            plan_data = json.loads(plan_match.group())
-            # Ensure build_order exists
-            if "build_order" not in plan_data:
-                # Derive from components
-                components = plan_data.get("components", [])
-                plan_data["build_order"] = [
-                    c["file"] for c in components if "file" in c
-                ]
-                # Ensure entry point is last
-                entry = plan_data.get("entry_point", "main.py")
-                if entry in plan_data["build_order"]:
-                    plan_data["build_order"].remove(entry)
-                plan_data["build_order"].append(entry)
-            return plan_data
-    except (json.JSONDecodeError, AttributeError):
-        pass
-    return None
+
+    # Strip markdown fences before parsing
+    cleaned = _strip_markdown_fences(raw_plan).strip()
+
+    # Try multiple JSON extraction strategies
+    plan_data = None
+    for candidate in [
+        cleaned,  # full response
+        raw_plan,  # original
+    ]:
+        try:
+            json_match = re.search(r"\{[\s\S]*\}", candidate)
+            if json_match:
+                plan_data = json.loads(json_match.group())
+                break
+        except (json.JSONDecodeError, AttributeError):
+            continue
+
+    if plan_data is None:
+        return None
+
+    # Ensure build_order exists
+    if "build_order" not in plan_data:
+        # Derive from components
+        components = plan_data.get("components", [])
+        plan_data["build_order"] = [
+            c["file"] for c in components if "file" in c
+        ]
+        # Ensure entry point is last
+        entry = plan_data.get("entry_point", "main.py")
+        if entry in plan_data["build_order"]:
+            plan_data["build_order"].remove(entry)
+        plan_data["build_order"].append(entry)
+
+    # Validate build_order has entries
+    if not plan_data.get("build_order"):
+        plan_data["build_order"] = ["main.py"]
+
+    return plan_data
 
 
 async def _build_single_module(
@@ -2006,7 +2059,24 @@ async def _build_single_module(
     raw_code = await _call_ai(
         messages, api_key, max_tokens=4000, use_heavy_model=True
     )
-    return _strip_markdown_fences(raw_code)
+    code = _strip_markdown_fences(raw_code)
+
+    # Guard: if the AI returned JSON instead of raw code, extract the content
+    if code.lstrip().startswith("{") and '"content"' in code:
+        try:
+            data = json.loads(code)
+            if isinstance(data, dict) and "content" in data:
+                return data["content"]
+        except json.JSONDecodeError:
+            # Try to extract the content field value
+            cm = re.search(r'"content"\s*:\s*"((?:[^"\\]|\\.)*)"', code, re.DOTALL)
+            if cm:
+                try:
+                    return json.loads('"' + cm.group(1) + '"')
+                except json.JSONDecodeError:
+                    pass
+
+    return code
 
 
 async def _review_project(
