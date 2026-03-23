@@ -57,7 +57,7 @@ def _emit_progress(project_name: str, phase: str, detail: str, progress: float =
         "timestamp": time.time(),
     })
 
-# Complexity keywords — trigger the heavy pipeline
+# Complexity keywords — trigger the heavy pipeline (multi-pass iteration)
 COMPLEX_KEYWORDS = {
     "business", "enterprise", "production", "fullstack", "full-stack",
     "microservice", "authentication", "authorization", "oauth",
@@ -75,6 +75,14 @@ COMPLEX_KEYWORDS = {
     "encryption", "security", "firewall",
     "multi-file", "complex", "advanced", "sophisticated",
     "with tests", "with logging", "with config",
+    # Additional keywords to catch more project types
+    "blog", "platform", "system", "forum", "social",
+    "chat", "messaging", "notification", "scheduler", "workflow",
+    "api", "server", "client", "library", "sdk",
+    "tool", "utility", "manager", "tracker", "monitor",
+    "portal", "store", "marketplace", "catalog", "registry",
+    "with posts", "with comments", "with users", "with roles",
+    "multiple", "modules", "components", "services",
 }
 
 
@@ -1150,6 +1158,9 @@ SYSTEM_PROMPT_PLAN = textwrap.dedent("""\
     - Use SQLite for databases (no external DB servers).
     - Specify build_order: list files in dependency order (foundations first, entry point last).
     - Each component must have a clear responsibility and interface description.
+    - Keep the entry point (main.py) THIN — it should only import from other modules and
+      orchestrate/demo them.  Put all real logic in dedicated modules.
+      main.py should be < 150 lines.
     - Return ONLY the JSON, no other text.\
 """)
 
@@ -2056,8 +2067,11 @@ async def _build_single_module(
         )},
     ]
 
+    # Use higher token limit for entry points which tend to be larger
+    is_entry = module_file == plan_data.get("entry_point", "main.py")
+    token_limit = 6000 if is_entry else 4000
     raw_code = await _call_ai(
-        messages, api_key, max_tokens=4000, use_heavy_model=True
+        messages, api_key, max_tokens=token_limit, use_heavy_model=True
     )
     code = _strip_markdown_fences(raw_code)
 
@@ -2446,24 +2460,24 @@ async def _run_single_pipeline_pass(
     _emit_progress(project_name, "Phase 1", f"Generating architecture plan… ({pass_label})", 0.05)
     plan_data = None
 
-    if complex_mode:
-        # On retry passes, include previous error context so AI learns
-        extra_context = ""
-        if iteration_history:
-            last = iteration_history[-1]
-            extra_context = (
-                f"\nPREVIOUS ATTEMPT FAILED (pass {last['pass']}). "
-                f"Status: {last['status']}. "
-                f"Improve the architecture to avoid the same issues."
-            )
-        if extra_context:
-            plan_data = await _generate_detailed_plan(
-                args + extra_context, api_key
-            )
-        else:
-            plan_data = await _generate_detailed_plan(args, api_key)
+    # Always generate an architecture plan for project mode.
+    # complex_mode only controls intensity (passes, timeouts), not planning.
+    extra_context = ""
+    if iteration_history:
+        last = iteration_history[-1]
+        extra_context = (
+            f"\nPREVIOUS ATTEMPT FAILED (pass {last['pass']}). "
+            f"Status: {last['status']}. "
+            f"Improve the architecture to avoid the same issues."
+        )
+    if extra_context:
+        plan_data = await _generate_detailed_plan(
+            args + extra_context, api_key
+        )
+    else:
+        plan_data = await _generate_detailed_plan(args, api_key)
 
-    # If planning failed or not complex, fall back to one-shot generation
+    # If planning failed, fall back to one-shot generation
     if not plan_data or not plan_data.get("build_order"):
         return await _handle_project_oneshot(args, api_key, project_name, has_vscode, plan_data)
 
