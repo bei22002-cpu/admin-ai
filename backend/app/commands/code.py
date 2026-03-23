@@ -1,25 +1,38 @@
 """MCP Code Command - Devin-like agentic AI coding system.
 
 Autonomous code generation with:
-- Generate → Execute → Auto-fix loop (up to 5 attempts)
-- Auto-install missing dependencies (pip/npm)
+- Generate, Execute, Auto-fix loop (up to 10 attempts)
+- Auto-install missing dependencies (pip/npm/cargo/go)
 - Edit existing files with AI
-- Multi-file project scaffolding
+- Multi-file project scaffolding in any language
 - Conversation memory for iterative development
 - Smart language detection and proper error diagnosis
+- Codebase awareness: scan and modify existing repos
+- Web research: look up docs/APIs during coding
+- Long-running iteration: multi-pass pipeline until clean
+- Rate-limit retry with exponential backoff
+- Subprocess sandboxing for safe code execution
 """
 
 import ast
 import asyncio
 import json
+import logging
 import os
 import re
 import shutil
 import subprocess
 import textwrap
 import time
+from urllib.parse import quote_plus
 
 import httpx
+
+logger = logging.getLogger(__name__)
+
+# ─── Rate-Limit Retry Config ────────────────────────────────────
+_MAX_RETRIES = 5
+_RETRY_BASE_DELAY = 2.0  # seconds — doubles each retry
 
 MAX_FIX_ATTEMPTS = 10
 MAX_FIX_ATTEMPTS_SIMPLE = 5
@@ -146,28 +159,48 @@ async def _call_openai(
     max_tokens: int = 2500,
     use_heavy_model: bool = False,
 ) -> str:
-    """Call OpenAI API. Uses gpt-4o / gpt-4o-mini."""
+    """Call OpenAI API with retry-on-rate-limit. Uses gpt-4o / gpt-4o-mini."""
     model = "gpt-4o" if use_heavy_model else "gpt-4o-mini"
     timeout = 180.0 if use_heavy_model else 90.0
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": 0.15 if use_heavy_model else 0.2,
-            },
-        )
-        if response.status_code == 200:
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
-        return f"AI error (HTTP {response.status_code}): {response.text[:300]}"
+    for attempt in range(_MAX_RETRIES):
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            try:
+                response = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": messages,
+                        "max_tokens": max_tokens,
+                        "temperature": 0.15 if use_heavy_model else 0.2,
+                    },
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    return data["choices"][0]["message"]["content"]
+                if response.status_code == 429:
+                    delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning("OpenAI rate limit hit, retrying in %.1fs (attempt %d/%d)", delay, attempt + 1, _MAX_RETRIES)
+                    await asyncio.sleep(delay)
+                    continue
+                if response.status_code >= 500:
+                    delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning("OpenAI server error %d, retrying in %.1fs", response.status_code, delay)
+                    await asyncio.sleep(delay)
+                    continue
+                return f"AI error (HTTP {response.status_code}): {response.text[:300]}"
+            except (httpx.TimeoutException, httpx.ConnectError) as exc:
+                if attempt < _MAX_RETRIES - 1:
+                    delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning("OpenAI request failed (%s), retrying in %.1fs", exc, delay)
+                    await asyncio.sleep(delay)
+                    continue
+                return f"AI error (timeout after {_MAX_RETRIES} retries): {exc}"
+    return "AI error: max retries exceeded (rate limit)"
 
 
 async def _call_anthropic(
@@ -203,23 +236,42 @@ async def _call_anthropic(
     if system_content:
         request_body["system"] = system_content
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "content-type": "application/json",
-                "anthropic-version": "2023-06-01",
-            },
-            json=request_body,
-        )
-        if response.status_code == 200:
-            data = response.json()
-            # Anthropic returns content as a list of blocks
-            content_blocks = data.get("content", [])
-            text_parts = [b["text"] for b in content_blocks if b.get("type") == "text"]
-            return "\n".join(text_parts) if text_parts else "No response from AI."
-        return f"AI error (HTTP {response.status_code}): {response.text[:300]}"
+    for attempt in range(_MAX_RETRIES):
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            try:
+                response = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": api_key,
+                        "content-type": "application/json",
+                        "anthropic-version": "2023-06-01",
+                    },
+                    json=request_body,
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    content_blocks = data.get("content", [])
+                    text_parts = [b["text"] for b in content_blocks if b.get("type") == "text"]
+                    return "\n".join(text_parts) if text_parts else "No response from AI."
+                if response.status_code == 429:
+                    delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning("Anthropic rate limit hit, retrying in %.1fs (attempt %d/%d)", delay, attempt + 1, _MAX_RETRIES)
+                    await asyncio.sleep(delay)
+                    continue
+                if response.status_code >= 500:
+                    delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning("Anthropic server error %d, retrying in %.1fs", response.status_code, delay)
+                    await asyncio.sleep(delay)
+                    continue
+                return f"AI error (HTTP {response.status_code}): {response.text[:300]}"
+            except (httpx.TimeoutException, httpx.ConnectError) as exc:
+                if attempt < _MAX_RETRIES - 1:
+                    delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning("Anthropic request failed (%s), retrying in %.1fs", exc, delay)
+                    await asyncio.sleep(delay)
+                    continue
+                return f"AI error (timeout after {_MAX_RETRIES} retries): {exc}"
+    return "AI error: max retries exceeded (rate limit)"
 
 
 # ─── Code Parsing ────────────────────────────────────────────────
@@ -241,16 +293,25 @@ def _detect_language(code: str, request: str) -> tuple[str, str, str]:
     """Detect language from code content.
 
     Returns (extension, interpreter_command, language_name).
+    Supports Python, JavaScript, TypeScript, Go, Rust, Java, C++, HTML, Bash, CSS.
     """
     request_lower = request.lower()
     code_lower = code.lower()
 
     # Check request hints first
-    if any(w in request_lower for w in ["javascript", "node", "react", "express", ".js"]):
+    if any(w in request_lower for w in ["javascript", "node", "react", "express", "next.js", ".js"]):
         return ".js", "node", "javascript"
-    if any(w in request_lower for w in ["typescript", ".ts"]):
+    if any(w in request_lower for w in ["typescript", "angular", "nest.js", ".ts"]):
         return ".ts", "npx ts-node", "typescript"
-    if any(w in request_lower for w in ["html", "webpage", "website"]):
+    if any(w in request_lower for w in ["golang", " go ", "go app", "go api", "gin ", "fiber "]):
+        return ".go", "go run", "go"
+    if any(w in request_lower for w in [" rust ", "rust app", "cargo", "tokio"]):
+        return ".rs", "cargo_run", "rust"
+    if any(w in request_lower for w in [" java ", "java app", "spring", "maven", "gradle"]):
+        return ".java", "java_compile_run", "java"
+    if any(w in request_lower for w in ["c++", "cpp", "g++", "cmake"]):
+        return ".cpp", "cpp_compile_run", "cpp"
+    if any(w in request_lower for w in ["html", "webpage", "website", "landing page"]):
         return ".html", "", "html"
     if any(w in request_lower for w in ["bash", "shell", "script"]):
         return ".sh", "bash", "bash"
@@ -258,6 +319,14 @@ def _detect_language(code: str, request: str) -> tuple[str, str, str]:
         return ".css", "", "css"
 
     # Detect from code content
+    if "package main" in code and ("func " in code or "import " in code):
+        return ".go", "go run", "go"
+    if "fn main()" in code or "use std::" in code or "#[derive" in code:
+        return ".rs", "cargo_run", "rust"
+    if "public static void main" in code or "class " in code and "System.out" in code:
+        return ".java", "java_compile_run", "java"
+    if "#include" in code and ("int main" in code or "std::" in code):
+        return ".cpp", "cpp_compile_run", "cpp"
     if "import " in code or "def " in code or "class " in code or "print(" in code:
         return ".py", "python3", "python"
     if "function " in code or "const " in code or "require(" in code or "console.log" in code:
@@ -445,37 +514,111 @@ def _save_multi_file_project(project_data: dict, project_name: str) -> tuple[str
     return project_dir, entry_path
 
 
+# ─── Subprocess Sandboxing (Enhancement #6) ─────────────────────
+
+
+def _sandboxed_run(
+    cmd: list[str],
+    cwd: str,
+    timeout: int = EXEC_TIMEOUT_SIMPLE,
+) -> subprocess.CompletedProcess[str]:
+    """Run a command in a restricted subprocess.
+
+    Applies resource limits to prevent runaway processes:
+    - CPU time limit (matches timeout)
+    - Address space limit (512 MB)
+    - File size limit (50 MB)
+    - No network restrictions (some code needs network)
+    """
+    def _set_limits() -> None:
+        """Pre-exec function to set resource limits on child process."""
+        try:
+            # CPU time limit (soft = timeout, hard = timeout + 10)
+            resource.setrlimit(resource.RLIMIT_CPU, (timeout, timeout + 10))
+            # Address space: 512 MB
+            mem_limit = 512 * 1024 * 1024
+            resource.setrlimit(resource.RLIMIT_AS, (mem_limit, mem_limit))
+            # Max file size: 50 MB
+            file_limit = 50 * 1024 * 1024
+            resource.setrlimit(resource.RLIMIT_FSIZE, (file_limit, file_limit))
+        except (ValueError, OSError):
+            pass  # some limits may not be supported on all platforms
+
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        cwd=cwd,
+        preexec_fn=_set_limits,
+    )
+
+
 # ─── Code Execution ──────────────────────────────────────────────
 
 
 def _run_code(
     filepath: str, interpreter: str, timeout: int = EXEC_TIMEOUT_SIMPLE
 ) -> tuple[bool, str, str]:
-    """Execute code and return (success, stdout, stderr)."""
+    """Execute code and return (success, stdout, stderr).
+
+    Supports compiled languages (Go, Rust, Java, C++) via special interpreter
+    tokens that trigger a compile-then-run workflow.
+    """
     if not interpreter:
         return True, f"File saved: {filepath}", ""
 
+    cwd = os.path.dirname(filepath)
+
     try:
-        cmd = (
-            [interpreter, filepath]
-            if " " not in interpreter
-            else interpreter.split() + [filepath]
-        )
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=os.path.dirname(filepath),
-        )
+        # ── Compiled language handlers ────────────────────────────
+        if interpreter == "go run":
+            cmd = ["go", "run", filepath]
+        elif interpreter == "cargo_run":
+            # Rust: compile with rustc, then run the binary
+            binary = filepath.replace(".rs", "")
+            comp = subprocess.run(
+                ["rustc", filepath, "-o", binary],
+                capture_output=True, text=True, timeout=timeout, cwd=cwd,
+            )
+            if comp.returncode != 0:
+                return False, "", comp.stderr[:5000]
+            cmd = [binary]
+        elif interpreter == "java_compile_run":
+            # Java: compile with javac, then run with java
+            comp = subprocess.run(
+                ["javac", filepath],
+                capture_output=True, text=True, timeout=timeout, cwd=cwd,
+            )
+            if comp.returncode != 0:
+                return False, "", comp.stderr[:5000]
+            class_name = os.path.splitext(os.path.basename(filepath))[0]
+            cmd = ["java", "-cp", cwd, class_name]
+        elif interpreter == "cpp_compile_run":
+            # C++: compile with g++, then run
+            binary = filepath.replace(".cpp", "")
+            comp = subprocess.run(
+                ["g++", "-std=c++17", "-o", binary, filepath],
+                capture_output=True, text=True, timeout=timeout, cwd=cwd,
+            )
+            if comp.returncode != 0:
+                return False, "", comp.stderr[:5000]
+            cmd = [binary]
+        elif " " not in interpreter:
+            cmd = [interpreter, filepath]
+        else:
+            cmd = interpreter.split() + [filepath]
+
+        # ── Sandboxed execution ───────────────────────────────────
+        result = _sandboxed_run(cmd, cwd=cwd, timeout=timeout)
         stdout = result.stdout[:5000] if result.stdout else ""
         stderr = result.stderr[:5000] if result.stderr else ""
         success = result.returncode == 0
         return success, stdout, stderr
     except subprocess.TimeoutExpired:
         return False, "", f"Execution timed out ({timeout}s limit)."
-    except FileNotFoundError:
-        return False, "", f"Interpreter not found: {interpreter}"
+    except FileNotFoundError as e:
+        return False, "", f"Interpreter/compiler not found: {e}"
     except Exception as e:
         return False, "", f"Execution error: {e}"
 
@@ -491,7 +634,14 @@ def _read_project_files(project_dir: str) -> str:
         for fname in sorted(files):
             if len(context_parts) >= max_files:
                 break
-            if not fname.endswith((".py", ".js", ".ts", ".json", ".txt", ".cfg", ".ini", ".yaml", ".yml")):
+            if not fname.endswith((
+                ".py", ".js", ".ts", ".jsx", ".tsx", ".json", ".txt",
+                ".cfg", ".ini", ".yaml", ".yml", ".toml",
+                ".go", ".rs", ".java", ".cpp", ".c", ".h", ".hpp", ".cs",
+                ".rb", ".php", ".swift", ".kt", ".scala",
+                ".html", ".css", ".scss", ".vue", ".svelte",
+                ".sql", ".sh", ".bash", ".md",
+            )):
                 continue
             if fname.startswith(".") or "__pycache__" in root:
                 continue
@@ -625,6 +775,195 @@ def _git_init_and_commit(project_dir: str, message: str) -> bool:
         return False
 
 
+# ─── Web Research (Upgrade #3) ──────────────────────────────────
+
+
+async def _web_research(query: str) -> str:
+    """Search the web for documentation, APIs, and code examples.
+
+    Uses DuckDuckGo's HTML endpoint (no API key needed) to find relevant
+    information that helps the AI generate better code.
+    Returns a summary of the top results.
+    """
+    try:
+        encoded = quote_plus(query)
+        url = f"https://html.duckduckgo.com/html/?q={encoded}"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(
+                url,
+                headers={"User-Agent": "MCP-Grid/1.0"},
+                follow_redirects=True,
+            )
+            if response.status_code != 200:
+                return ""
+
+            text = response.text
+            # Extract result snippets from DuckDuckGo HTML results
+            snippets: list[str] = []
+            for match in re.finditer(
+                r'class="result__snippet"[^>]*>(.*?)</a>', text, re.DOTALL
+            ):
+                snippet = re.sub(r"<[^>]+>", "", match.group(1)).strip()
+                if snippet:
+                    snippets.append(snippet)
+                if len(snippets) >= 5:
+                    break
+
+            if not snippets:
+                return ""
+            return "Web research results:\n" + "\n".join(
+                f"- {s}" for s in snippets
+            )
+    except Exception as exc:
+        logger.debug("Web research failed: %s", exc)
+        return ""
+
+
+# ─── Codebase Awareness (Upgrade #2) ────────────────────────────
+
+# Supported source file extensions for repo scanning
+_SOURCE_EXTENSIONS = {
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".java",
+    ".cpp", ".c", ".h", ".hpp", ".cs", ".rb", ".php", ".swift",
+    ".kt", ".scala", ".html", ".css", ".scss", ".vue", ".svelte",
+    ".json", ".yaml", ".yml", ".toml", ".cfg", ".ini", ".txt",
+    ".md", ".sql", ".sh", ".bash", ".dockerfile",
+}
+
+
+def _scan_repo(repo_path: str) -> dict:
+    """Scan an existing repository and build a structural summary.
+
+    Returns a dict with:
+    - tree: file tree string
+    - key_files: dict of important files and their first N lines
+    - languages: set of detected languages
+    - frameworks: list of detected frameworks
+    - entry_points: list of likely entry point files
+    """
+    tree_lines: list[str] = []
+    key_files: dict[str, str] = {}
+    languages: set[str] = set()
+    entry_points: list[str] = []
+    total_files = 0
+    max_scan_files = 200
+
+    # Detect frameworks from config files
+    frameworks: list[str] = []
+    config_indicators = {
+        "package.json": "Node.js",
+        "requirements.txt": "Python (pip)",
+        "pyproject.toml": "Python (poetry/pip)",
+        "Cargo.toml": "Rust (cargo)",
+        "go.mod": "Go (modules)",
+        "pom.xml": "Java (Maven)",
+        "build.gradle": "Java (Gradle)",
+        "Gemfile": "Ruby (Bundler)",
+        "composer.json": "PHP (Composer)",
+        "CMakeLists.txt": "C/C++ (CMake)",
+        "Makefile": "Make",
+        "Dockerfile": "Docker",
+        "docker-compose.yml": "Docker Compose",
+        "tsconfig.json": "TypeScript",
+        "next.config.js": "Next.js",
+        "vite.config.ts": "Vite",
+        "angular.json": "Angular",
+        "vue.config.js": "Vue.js",
+    }
+
+    for root, dirs, files in os.walk(repo_path):
+        # Skip hidden dirs, node_modules, __pycache__, etc.
+        dirs[:] = [
+            d for d in dirs
+            if not d.startswith(".")
+            and d not in {"node_modules", "__pycache__", "venv", ".venv",
+                          "dist", "build", "target", ".git", "vendor"}
+        ]
+        rel_root = os.path.relpath(root, repo_path)
+        depth = rel_root.count(os.sep) if rel_root != "." else 0
+        if depth > 5:
+            continue
+
+        for fname in sorted(files):
+            if total_files >= max_scan_files:
+                break
+            ext = os.path.splitext(fname)[1].lower()
+            if ext not in _SOURCE_EXTENSIONS and fname not in config_indicators:
+                continue
+            total_files += 1
+
+            rel_path = os.path.join(rel_root, fname) if rel_root != "." else fname
+            tree_lines.append(f"  {'  ' * depth}{fname}")
+
+            # Detect language
+            lang_map = {
+                ".py": "python", ".js": "javascript", ".ts": "typescript",
+                ".go": "go", ".rs": "rust", ".java": "java",
+                ".cpp": "cpp", ".c": "c", ".rb": "ruby", ".php": "php",
+            }
+            if ext in lang_map:
+                languages.add(lang_map[ext])
+
+            # Check framework indicators
+            if fname in config_indicators:
+                frameworks.append(config_indicators[fname])
+
+            # Identify entry points
+            if fname in {"main.py", "app.py", "index.js", "index.ts",
+                         "main.go", "main.rs", "Main.java", "main.cpp",
+                         "server.py", "server.js", "manage.py"}:
+                entry_points.append(rel_path)
+
+            # Read key files (first 50 lines for context)
+            full_path = os.path.join(root, fname)
+            if fname in config_indicators or fname in {
+                "main.py", "app.py", "index.js", "README.md",
+            }:
+                try:
+                    with open(full_path) as f:
+                        content = "".join(f.readlines()[:50])
+                    key_files[rel_path] = content
+                except Exception:
+                    pass
+
+    return {
+        "tree": "\n".join(tree_lines[:100]),
+        "key_files": key_files,
+        "languages": languages,
+        "frameworks": frameworks,
+        "entry_points": entry_points,
+        "file_count": total_files,
+    }
+
+
+def _build_repo_context(repo_path: str) -> str:
+    """Build a context string from an existing repo for the AI.
+
+    Returns a formatted summary of the repo structure, frameworks,
+    and key file contents.
+    """
+    info = _scan_repo(repo_path)
+    parts: list[str] = []
+
+    parts.append(f"Repository: {repo_path}")
+    parts.append(f"Files scanned: {info['file_count']}")
+    if info["languages"]:
+        parts.append(f"Languages: {', '.join(sorted(info['languages']))}")
+    if info["frameworks"]:
+        parts.append(f"Frameworks: {', '.join(info['frameworks'])}")
+    if info["entry_points"]:
+        parts.append(f"Entry points: {', '.join(info['entry_points'])}")
+
+    parts.append(f"\nFile tree:\n{info['tree']}")
+
+    if info["key_files"]:
+        parts.append("\nKey file contents:")
+        for fpath, content in info["key_files"].items():
+            parts.append(f"\n--- {fpath} ---\n{content}")
+
+    return "\n".join(parts)
+
+
 # ─── System Prompts ──────────────────────────────────────────────
 
 SYSTEM_PROMPT_SINGLE = textwrap.dedent("""\
@@ -640,7 +979,9 @@ SYSTEM_PROMPT_SINGLE = textwrap.dedent("""\
     - Add docstrings to classes and important functions.
     - Include a main execution block that DEMONSTRATES the code working.
     - Use descriptive variable names, not single letters.
-    - Follow PEP 8 (Python) or standard style guides.
+    - Follow PEP 8 (Python), ESLint (JS/TS), gofmt (Go), or standard style guides.
+    - Generate code in whatever language best fits the request.
+    - If the user specifies a language (e.g. "in Go", "using Rust"), use that language.
     - If the request is vague, build something impressive and functional.
     - Prefer standard library over third-party packages when possible.
     - Structure code with classes and functions, not loose scripts.
@@ -777,19 +1118,20 @@ SYSTEM_PROMPT_MODULE = textwrap.dedent("""\
     - The specification for THIS module you need to build now
 
     Rules:
-    - Return ONLY the Python code for this ONE module. No markdown fences, no prose.
+    - Return ONLY the code for this ONE module. No markdown fences, no prose.
     - The code must be COMPLETE and self-contained for this module.
-    - Import from other project modules using relative imports or direct imports.
+    - Import from other project modules using the appropriate import mechanism.
     - The code must be compatible with the already-built modules.
-    - Use proper type hints, docstrings, error handling.
-    - Follow PEP 8.
-    - NEVER use input() or interactive prompts.
-    - If this is the entry point (main.py), include a comprehensive demo in main()
+    - Use the language specified in the architecture plan.
+    - Use proper type annotations, documentation, error handling.
+    - Follow the language's standard style guide (PEP 8, gofmt, rustfmt, etc.).
+    - NEVER use interactive stdin prompts. The code runs headlessly.
+    - If this is the entry point, include a comprehensive demo
       that exercises ALL features from ALL modules with hardcoded example data.
     - The demo must produce clear, formatted console output proving everything works.
     - Use design patterns appropriate for the module's role.
     - Include logging with proper log levels.
-    - Add custom exception classes where appropriate.\
+    - Add custom exception/error types where appropriate.\
 """)
 
 SYSTEM_PROMPT_REVIEW = textwrap.dedent("""\
@@ -898,6 +1240,7 @@ def _parse_request(args: str) -> dict:
     Supports:
     - "edit <filepath> <instructions>" — edit an existing file
     - "fix <filepath>" — fix errors in an existing file
+    - "in /path/to/repo <instructions>" — modify an existing repo
     - "add tests for the last thing" — use memory
     - "a todo list app" — multi-file project
     - "fibonacci generator" — single file
@@ -925,6 +1268,15 @@ def _parse_request(args: str) -> dict:
         gen_path = os.path.join(OUTPUT_BASE, filepath)
         if os.path.exists(gen_path):
             return {"mode": "fix", "filepath": gen_path}
+
+    # Codebase awareness: "in /path/to/repo <instructions>"
+    if args_lower.startswith("in "):
+        parts = args[3:].strip().split(" ", 1)
+        if len(parts) >= 2:
+            repo_path = parts[0]
+            instructions = parts[1]
+            if os.path.isdir(repo_path):
+                return {"mode": "repo", "repo_path": repo_path, "instructions": instructions}
 
     # Memory-based requests
     if any(phrase in args_lower for phrase in ["last thing", "previous", "that code", "last code"]):
@@ -1004,6 +1356,8 @@ async def handle_code(args: str) -> dict:
             return await _handle_fix_existing(request, api_key, has_vscode)
         elif request["mode"] == "followup":
             return await _handle_followup(request, api_key, has_vscode)
+        elif request["mode"] == "repo":
+            return await _handle_repo(request, api_key, has_vscode)
         elif request["mode"] == "project":
             project_name = re.sub(r"[^a-z0-9_]", "_", args.lower())[:40]
             return await _handle_project(args, api_key, project_name, has_vscode)
@@ -1255,6 +1609,156 @@ async def _handle_followup(request: dict, api_key: str, has_vscode: bool) -> dic
     }
 
 
+# ─── Codebase Awareness: Modify Existing Repo ───────────────────
+
+
+async def _handle_repo(
+    request: dict, api_key: str, has_vscode: bool
+) -> dict:
+    """Modify an existing repository based on user instructions.
+
+    Scans the repo structure, reads relevant files, then asks AI to generate
+    changes (new files or modifications) that integrate with the existing codebase.
+    """
+    repo_path = request["repo_path"]
+    instructions = request["instructions"]
+
+    # Phase 1: Scan the repo
+    await _emit_progress("Scanning repository structure…")
+    repo_context = _build_repo_context(repo_path)
+
+    # Phase 2: Optional web research for unfamiliar topics
+    research = ""
+    research_keywords = [
+        "library", "api", "framework", "sdk", "package",
+        "integration", "oauth", "graphql", "websocket",
+    ]
+    if any(kw in instructions.lower() for kw in research_keywords):
+        await _emit_progress("Researching documentation…")
+        research = await _web_research(f"{instructions} programming tutorial")
+
+    # Phase 3: Ask AI to plan the changes
+    await _emit_progress("Planning changes to repository…")
+    plan_prompt = f"""\
+You are modifying an EXISTING codebase. Here is the repository structure and
+key file contents:
+
+{repo_context}
+
+{f"Relevant documentation:{chr(10)}{research}{chr(10)}" if research else ""}
+User request: {instructions}
+
+Produce a JSON array of file operations. Each element must be an object with:
+  "path": relative file path (e.g. "src/utils/auth.py"),
+  "action": "create" | "modify",
+  "content": the COMPLETE file content (for modify, the full new file content)
+
+Return ONLY the JSON array. No markdown fences, no prose.
+"""
+    plan_raw = await _call_ai(
+        [{"role": "user", "content": plan_prompt}],
+        api_key,
+        max_tokens=4000,
+        use_heavy_model=True,
+    )
+    plan_raw = _strip_markdown_fences(plan_raw)
+
+    # Phase 4: Parse and apply changes
+    await _emit_progress("Applying changes…")
+    try:
+        changes = json.loads(plan_raw)
+    except json.JSONDecodeError:
+        # Try to extract JSON array from the response
+        match = re.search(r"\[.*\]", plan_raw, re.DOTALL)
+        if match:
+            try:
+                changes = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                return {
+                    "message": "Failed to parse AI change plan.",
+                    "data": {"raw_plan": plan_raw[:2000], "status": "error"},
+                }
+        else:
+            return {
+                "message": "Failed to parse AI change plan.",
+                "data": {"raw_plan": plan_raw[:2000], "status": "error"},
+            }
+
+    files_changed: list[str] = []
+    files_created: list[str] = []
+
+    for change in changes:
+        if not isinstance(change, dict):
+            continue
+        rel_path = change.get("path", "")
+        action = change.get("action", "create")
+        content = change.get("content", "")
+        if not rel_path or not content:
+            continue
+
+        abs_path = os.path.join(repo_path, rel_path)
+        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+
+        if action == "modify" and os.path.exists(abs_path):
+            files_changed.append(rel_path)
+        else:
+            files_created.append(rel_path)
+
+        with open(abs_path, "w") as f:
+            f.write(content)
+
+    # Phase 5: Try to run the entry point to verify
+    entry_candidates = ["main.py", "app.py", "index.js", "main.go", "main.rs", "Main.java"]
+    entry_point = None
+    for candidate in entry_candidates:
+        full = os.path.join(repo_path, candidate)
+        if os.path.exists(full):
+            entry_point = full
+            break
+    # Also check src/ subdirectory
+    if not entry_point:
+        for candidate in entry_candidates:
+            full = os.path.join(repo_path, "src", candidate)
+            if os.path.exists(full):
+                entry_point = full
+                break
+
+    run_result = ""
+    if entry_point:
+        ext = os.path.splitext(entry_point)[1]
+        interpreter_map = {
+            ".py": "python3", ".js": "node", ".ts": "npx ts-node",
+            ".go": "go run", ".rs": "cargo_run", ".java": "java_compile_run",
+        }
+        interp = interpreter_map.get(ext, "")
+        if interp:
+            success, stdout, stderr = _run_code(entry_point, interp)
+            if success:
+                run_result = f"Verification passed. Output:\n{stdout[:500]}"
+            else:
+                run_result = f"Verification had errors:\n{stderr[:500]}"
+
+    if has_vscode:
+        subprocess.Popen(["code", repo_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    total = len(files_changed) + len(files_created)
+    return {
+        "message": (
+            f"Repository modified: {total} file(s) updated.\n"
+            f"Created: {', '.join(files_created) if files_created else 'none'}\n"
+            f"Modified: {', '.join(files_changed) if files_changed else 'none'}\n"
+            f"{run_result}"
+        ),
+        "data": {
+            "repo_path": repo_path,
+            "files_created": files_created,
+            "files_changed": files_changed,
+            "verification": run_result,
+            "status": "completed",
+        },
+    }
+
+
 # ─── Single File Generation ──────────────────────────────────────
 
 
@@ -1396,10 +1900,33 @@ async def _handle_single_file(
 async def _generate_detailed_plan(
     args: str, api_key: str
 ) -> dict | None:
-    """Phase 1: Generate a detailed architecture plan with build order."""
+    """Phase 1: Generate a detailed architecture plan with build order.
+
+    Includes web research for requests that mention unfamiliar libraries,
+    APIs, or frameworks so the AI has documentation context.
+    """
+    # Web research: look up docs for any mentioned libraries/frameworks
+    research_context = ""
+    research_keywords = [
+        "library", "api", "framework", "sdk", "package", "integration",
+        "oauth", "graphql", "websocket", "redis", "kafka", "docker",
+        "kubernetes", "aws", "azure", "gcp", "firebase", "supabase",
+        "stripe", "twilio", "sendgrid", "tensorflow", "pytorch", "react",
+        "vue", "angular", "svelte", "django", "flask", "fastapi", "express",
+        "next.js", "nest.js", "spring", "gin", "fiber", "actix", "rocket",
+    ]
+    if any(kw in args.lower() for kw in research_keywords):
+        research_context = await _web_research(
+            f"{args} programming tutorial documentation"
+        )
+
     plan_messages = [
         {"role": "system", "content": SYSTEM_PROMPT_PLAN},
-        {"role": "user", "content": f"Plan the architecture for: {args}"},
+        {"role": "user", "content": (
+            f"Plan the architecture for: {args}"
+            + (f"\n\nRelevant documentation from web research:\n{research_context}"
+               if research_context else "")
+        )},
     ]
     raw_plan = await _call_ai(
         plan_messages, api_key, max_tokens=3000, use_heavy_model=True
@@ -1733,6 +2260,9 @@ async def _build_modules_parallel(
 # ─── Multi-File Project (Iterative Devin-like Pipeline) ─────────
 
 
+_MAX_PIPELINE_PASSES = 5  # Upgrade #4: max full-pipeline iterations
+
+
 async def _handle_project(
     args: str,
     api_key: str,
@@ -1740,6 +2270,10 @@ async def _handle_project(
     has_vscode: bool,
 ) -> dict:
     """Generate a multi-file project using an iterative Devin-like pipeline.
+
+    Upgrade #4 — Long-running iteration: wraps the entire pipeline in a
+    multi-pass loop.  If the code still has errors after a full pass, the
+    pipeline re-runs (re-plan, re-build, re-test) up to _MAX_PIPELINE_PASSES.
 
     Enhanced 6-phase process for complex projects:
       Phase 1:   Deep architecture planning with module specs and build order
@@ -1751,20 +2285,101 @@ async def _handle_project(
       Phase 6:   Polish — generate README, improve demo output
       Git:       Auto-init repo, commit after each phase
       SSE:       Emit progress events for real-time streaming
+      Multi-pass: Re-run full pipeline if code still fails (up to 5 passes)
     """
     complex_mode = _is_complex(args)
     max_fix = MAX_FIX_ATTEMPTS if complex_mode else MAX_FIX_ATTEMPTS_SIMPLE
     exec_timeout = EXEC_TIMEOUT if complex_mode else EXEC_TIMEOUT_SIMPLE
 
-    _emit_progress(project_name, "Init", "Starting iterative pipeline...", 0.0)
+    # Upgrade #4: track iteration history across passes
+    iteration_history: list[dict] = []
+    max_passes = _MAX_PIPELINE_PASSES if complex_mode else 1
+
+    for pipeline_pass in range(1, max_passes + 1):
+        pass_label = f"Pass {pipeline_pass}/{max_passes}"
+        _emit_progress(project_name, "Init", f"Starting iterative pipeline ({pass_label})...", 0.0)
+
+        result = await _run_single_pipeline_pass(
+            args, api_key, project_name, has_vscode,
+            complex_mode, max_fix, exec_timeout,
+            pipeline_pass, max_passes, iteration_history,
+        )
+
+        # Track this pass
+        pass_status = result.get("data", {}).get("status", "error")
+        iteration_history.append({
+            "pass": pipeline_pass,
+            "status": pass_status,
+            "quality_score": result.get("data", {}).get("quality_score", "N/A"),
+            "file_count": result.get("data", {}).get("file_count", 0),
+        })
+
+        # If code runs successfully or we've exhausted passes, return
+        if pass_status == "success" or pipeline_pass >= max_passes:
+            # Append iteration history to result
+            result["data"]["iteration_history"] = iteration_history
+            result["data"]["total_passes"] = pipeline_pass
+            if pipeline_pass > 1:
+                result["message"] = (
+                    f"[{pipeline_pass} pipeline passes] " + result["message"]
+                )
+            return result
+
+        # Code didn't work — clean up and retry
+        _emit_progress(
+            project_name, "Retry",
+            f"Pass {pipeline_pass} had issues — starting pass {pipeline_pass + 1}…",
+            0.0,
+        )
+        # Clean the project directory for a fresh attempt
+        project_dir = os.path.join(OUTPUT_BASE, project_name)
+        if os.path.isdir(project_dir):
+            shutil.rmtree(project_dir)
+
+    # Should not reach here, but safety return
+    return result  # type: ignore[possibly-undefined]
+
+
+async def _run_single_pipeline_pass(
+    args: str,
+    api_key: str,
+    project_name: str,
+    has_vscode: bool,
+    complex_mode: bool,
+    max_fix: int,
+    exec_timeout: int,
+    pipeline_pass: int,
+    max_passes: int,
+    iteration_history: list[dict],
+) -> dict:
+    """Execute one full pipeline pass (Phases 1-6).
+
+    Separated from _handle_project to support multi-pass iteration.
+    """
+    pass_label = f"Pass {pipeline_pass}/{max_passes}"
 
     # ────────────────────────────────────────────────────────────
     # PHASE 1: Architecture Planning
     # ────────────────────────────────────────────────────────────
-    _emit_progress(project_name, "Phase 1", "Generating architecture plan...", 0.05)
+    _emit_progress(project_name, "Phase 1", f"Generating architecture plan… ({pass_label})", 0.05)
     plan_data = None
+
     if complex_mode:
-        plan_data = await _generate_detailed_plan(args, api_key)
+        # On retry passes, include previous error context so AI learns
+        extra_context = ""
+        if iteration_history:
+            last = iteration_history[-1]
+            extra_context = (
+                f"\nPREVIOUS ATTEMPT FAILED (pass {last['pass']}). "
+                f"Status: {last['status']}. "
+                f"Improve the architecture to avoid the same issues."
+            )
+        if extra_context:
+            plan_data = await _generate_detailed_plan(
+                args + extra_context, api_key
+            )
+        else:
+            plan_data = await _generate_detailed_plan(args, api_key)
 
     # If planning failed or not complex, fall back to one-shot generation
     if not plan_data or not plan_data.get("build_order"):
