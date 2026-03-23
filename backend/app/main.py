@@ -667,6 +667,22 @@ async def stripe_webhook(request: Request) -> dict:
     return {"status": "received"}
 
 
+# ── Admin helpers ──────────────────────────────────────────────
+
+def _is_admin(user: dict) -> bool:
+    """Check if a user has admin privileges.
+
+    Admin is determined by the MCP_ADMIN_EMAILS env var (comma-separated list).
+    Falls back to user ID 1 if the env var is not set.
+    """
+    admin_emails = os.getenv("MCP_ADMIN_EMAILS", "").strip()
+    if admin_emails:
+        allowed = [e.strip().lower() for e in admin_emails.split(",") if e.strip()]
+        return user.get("email", "").lower() in allowed
+    # Fallback: first registered user is admin
+    return user["id"] == 1
+
+
 # Owner/admin override — set any user's plan without Stripe
 @app.post("/billing/set-plan")
 async def admin_set_plan(
@@ -678,8 +694,7 @@ async def admin_set_plan(
     admin = await get_current_user(authorization)
     if not admin:
         return {"status": "error", "message": "Not authenticated"}
-    # For now, user 1 (first registered) is admin
-    if admin["id"] != 1:
+    if not _is_admin(admin):
         return {"status": "error", "message": "Admin access required"}
     target_id = user_id if user_id else admin["id"]
     if plan not in PLANS:
