@@ -10,7 +10,7 @@ export const billingController = {
   },
 
   async getOrgBilling(req: Request, res: Response) {
-    const user = (req as Record<string, unknown>).user as { organizationId?: string };
+    const user = (req as unknown as { user?: { organizationId?: string } }).user;
     if (!user?.organizationId) {
       return res.json({
         currentPlan: { name: 'Free', price: 0 },
@@ -25,7 +25,7 @@ export const billingController = {
   },
 
   async changePlan(req: Request, res: Response) {
-    const user = (req as Record<string, unknown>).user as { organizationId?: string };
+    const user = (req as unknown as { user?: { organizationId?: string } }).user;
     if (!user?.organizationId) {
       return res.status(400).json({ error: 'No organization linked' });
     }

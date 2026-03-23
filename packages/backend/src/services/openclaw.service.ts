@@ -582,7 +582,7 @@ export class OpenClawService extends EventEmitter {
           throw new Error(`OpenClaw gateway returned ${response.status}`);
         }
 
-        const data = await response.json();
+        const data = await response.json() as { response?: string; message?: string };
         return data.response || data.message || 'No response from OpenClaw';
       }
 
