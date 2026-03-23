@@ -1,17 +1,26 @@
 """MCP Grid Backend - TRON-themed AI Desktop Assistant API."""
 
 import asyncio
+import logging
 import os
 import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+logger = logging.getLogger("mcp_grid")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+
+# Request timeout: 10 min for code generation, 30s for other endpoints
+REQUEST_TIMEOUT_CODE = 600
+REQUEST_TIMEOUT_DEFAULT = 30
+
+from app.auth import create_token, decode_token, hash_password, verify_password
 from app.commands import (
     handle_access,
     handle_alert,
@@ -22,6 +31,15 @@ from app.commands import (
     handle_search,
 )
 from app.commands.code import _progress_events
+from app.database import (
+    create_user,
+    get_user_by_email,
+    get_user_by_id,
+    get_user_projects,
+    init_db,
+    save_project,
+    update_project,
+)
 from app.utils.phase_manager import PhaseManager
 from app.voice.tts import speak_response
 
@@ -33,6 +51,7 @@ phase_manager = PhaseManager()
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     """MCP Grid startup/shutdown lifecycle."""
+    init_db()
     print("╔══════════════════════════════════════════╗")
     print("║       MCP ONLINE - GRID INITIALIZED      ║")
     print("║       Awaiting user input...              ║")
@@ -75,6 +94,32 @@ class CommandResponse(BaseModel):
 
 class PhaseRequest(BaseModel):
     phase: int
+
+
+class SignupRequest(BaseModel):
+    username: str
+    email: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+# ─── Auth Helper ──────────────────────────────────────────────────
+
+
+async def get_current_user(authorization: str | None = Header(default=None)) -> dict | None:
+    """Extract user from Authorization header. Returns None if not authenticated."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization[7:]
+    payload = decode_token(token)
+    if not payload:
+        return None
+    user = await get_user_by_id(payload["sub"])
+    return user
 
 
 # ─── Command Router ─────────────────────────────────────────────
@@ -148,7 +193,27 @@ async def execute_command(request: CommandRequest) -> CommandResponse:
             timestamp=time.time(),
         )
 
-    result = await handler(args)
+    try:
+        result = await asyncio.wait_for(
+            handler(args),
+            timeout=REQUEST_TIMEOUT_CODE if cmd == "code" else REQUEST_TIMEOUT_DEFAULT,
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"Command '{cmd}' timed out")
+        return CommandResponse(
+            status="error",
+            message=f"Command '{cmd}' timed out. Try a simpler request.",
+            tron_quote="System timeout. End of line.",
+            timestamp=time.time(),
+        )
+    except Exception as e:
+        logger.error(f"Command '{cmd}' failed: {e}")
+        return CommandResponse(
+            status="error",
+            message=f"Command failed: {str(e)[:200]}",
+            tron_quote="System malfunction. Retry sequence initiated.",
+            timestamp=time.time(),
+        )
     return CommandResponse(
         status="success",
         message=result["message"],
@@ -187,6 +252,148 @@ async def text_to_speech(request: CommandRequest) -> dict[str, str]:
     """Generate TRON-style TTS audio."""
     result = await speak_response(request.command)
     return result
+
+
+# ─── Auth Endpoints ────────────────────────────────────────────────
+
+
+@app.post("/auth/signup")
+async def signup(request: SignupRequest) -> dict:
+    """Create a new MCP Grid user account."""
+    if len(request.password) < 6:
+        return {"status": "error", "message": "Password must be at least 6 characters"}
+    if len(request.username) < 2:
+        return {"status": "error", "message": "Username must be at least 2 characters"}
+    try:
+        pw_hash = hash_password(request.password)
+        user = await create_user(request.username, request.email, pw_hash)
+        token = create_token(user["id"], user["username"])
+        return {
+            "status": "success",
+            "token": token,
+            "user": {"id": user["id"], "username": user["username"], "email": user["email"]},
+        }
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/auth/login")
+async def login(request: LoginRequest) -> dict:
+    """Log in to MCP Grid."""
+    user = await get_user_by_email(request.email)
+    if not user or not verify_password(request.password, user["password_hash"]):
+        return {"status": "error", "message": "Invalid email or password"}
+    token = create_token(user["id"], user["username"])
+    return {
+        "status": "success",
+        "token": token,
+        "user": {"id": user["id"], "username": user["username"], "email": user["email"]},
+    }
+
+
+@app.get("/auth/me")
+async def get_me(authorization: str | None = Header(default=None)) -> dict:
+    """Get current authenticated user."""
+    user = await get_current_user(authorization)
+    if not user:
+        return {"status": "error", "message": "Not authenticated"}
+    return {"status": "success", "user": user}
+
+
+# ─── Project History Endpoints ───────────────────────────────────
+
+
+@app.get("/projects")
+async def list_projects(authorization: str | None = Header(default=None)) -> dict:
+    """List projects for the authenticated user."""
+    user = await get_current_user(authorization)
+    if not user:
+        return {"status": "error", "message": "Not authenticated"}
+    projects = await get_user_projects(user["id"])
+    return {"status": "success", "projects": projects}
+
+
+@app.post("/command/auth")
+async def execute_command_auth(
+    request: CommandRequest,
+    authorization: str | None = Header(default=None),
+) -> CommandResponse:
+    """Execute an MCP command with optional auth (saves to project history)."""
+    user = await get_current_user(authorization)
+
+    cmd = request.command.lower().strip()
+    args = request.args.strip()
+
+    if cmd.startswith("mcp "):
+        parts = cmd[4:].split(" ", 1)
+        cmd = parts[0]
+        if len(parts) > 1:
+            args = parts[1] + (" " + args if args else "")
+
+    handler = COMMAND_MAP.get(cmd)
+    if not handler:
+        return CommandResponse(
+            status="error",
+            message=f"Unknown command: {cmd}. Available: {', '.join(COMMAND_MAP.keys())}",
+            tron_quote="Program not recognized. End of line.",
+            timestamp=time.time(),
+        )
+
+    # Save project to history if user is authenticated and command is 'code'
+    project_id = None
+    if user and cmd == "code":
+        project_id = await save_project(
+            user_id=user["id"],
+            name=args[:100],
+            description=args,
+            status="processing",
+        )
+
+    try:
+        result = await asyncio.wait_for(
+            handler(args),
+            timeout=REQUEST_TIMEOUT_CODE if cmd == "code" else REQUEST_TIMEOUT_DEFAULT,
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"Authenticated command '{cmd}' timed out")
+        if project_id:
+            await update_project(project_id=project_id, status="error")
+        return CommandResponse(
+            status="error",
+            message=f"Command '{cmd}' timed out. Try a simpler request.",
+            tron_quote="System timeout. End of line.",
+            timestamp=time.time(),
+        )
+    except Exception as e:
+        logger.error(f"Authenticated command '{cmd}' failed: {e}")
+        if project_id:
+            await update_project(project_id=project_id, status="error")
+        return CommandResponse(
+            status="error",
+            message=f"Command failed: {str(e)[:200]}",
+            tron_quote="System malfunction. Retry sequence initiated.",
+            timestamp=time.time(),
+        )
+    response = CommandResponse(
+        status="success",
+        message=result["message"],
+        data=result.get("data"),
+        tron_quote=get_tron_quote(),
+        timestamp=time.time(),
+    )
+
+    # Update project history
+    if project_id and result.get("data"):
+        data = result["data"]
+        await update_project(
+            project_id=project_id,
+            status=data.get("status", "success"),
+            file_count=data.get("file_count", 0),
+            output=data.get("output", "")[:500],
+            error_count=data.get("error_count", 0),
+        )
+
+    return response
 
 
 # ─── SSE Streaming Endpoint (Enhancement #3) ────────────────────
