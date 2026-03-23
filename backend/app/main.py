@@ -21,6 +21,16 @@ REQUEST_TIMEOUT_CODE = 600
 REQUEST_TIMEOUT_DEFAULT = 30
 
 from app.auth import create_token, decode_token, hash_password, verify_password
+from app.billing import (
+    PLANS,
+    check_feature_access,
+    check_rate_limit,
+    create_checkout_session,
+    create_portal_session,
+    get_plan_comparison,
+    handle_webhook_event,
+    increment_usage,
+)
 from app.commands import (
     handle_access,
     handle_alert,
@@ -53,10 +63,12 @@ from app.database import (
     create_user,
     get_user_by_email,
     get_user_by_id,
+    get_user_by_stripe_customer,
     get_user_projects,
     init_db,
     save_project,
     update_project,
+    update_user_plan,
 )
 from app.utils.phase_manager import PhaseManager
 from app.voice.tts import speak_response
@@ -375,6 +387,32 @@ async def execute_command_auth(
             timestamp=time.time(),
         )
 
+    # ── Tiered plan enforcement ──────────────────────────────
+    user_plan = user.get("plan", "free") if user else "free"
+    user_id = user["id"] if user else 0
+
+    # Check feature access
+    allowed, gate_msg = check_feature_access(cmd, user_plan)
+    if not allowed:
+        return CommandResponse(
+            status="error",
+            message=gate_msg,
+            tron_quote="Access denied. Upgrade required.",
+            timestamp=time.time(),
+        )
+
+    # Check rate limit
+    if user_id:
+        allowed, limit_msg = check_rate_limit(user_id, user_plan)
+        if not allowed:
+            return CommandResponse(
+                status="error",
+                message=limit_msg,
+                tron_quote="Rate limit exceeded. End of line.",
+                timestamp=time.time(),
+            )
+        increment_usage(user_id)
+
     # Save project to history if user is authenticated and command is 'code'
     project_id = None
     if user and cmd == "code":
@@ -523,6 +561,131 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         connected_clients.remove(websocket)
     except Exception:
         connected_clients.remove(websocket)
+
+
+# ─── Billing Endpoints ──────────────────────────────────────────
+
+
+class CheckoutRequest(BaseModel):
+    plan: str
+    interval: str = "monthly"
+    success_url: str = ""
+    cancel_url: str = ""
+
+
+@app.get("/billing/plans")
+async def get_plans() -> dict:
+    """Get available plans and pricing."""
+    return {"status": "success", "plans": get_plan_comparison()}
+
+
+@app.get("/billing/usage")
+async def get_usage(authorization: str | None = Header(default=None)) -> dict:
+    """Get current user's plan and usage stats."""
+    user = await get_current_user(authorization)
+    if not user:
+        return {
+            "status": "success",
+            "plan": "free",
+            "usage": {"commands_today": 0, "commands_limit": 10},
+        }
+    plan = user.get("plan", "free")
+    plan_config = PLANS.get(plan, PLANS["free"])
+    from app.billing import get_user_usage
+    usage = get_user_usage(user["id"])
+    return {
+        "status": "success",
+        "plan": plan,
+        "plan_name": plan_config["name"],
+        "usage": {
+            "commands_today": usage["commands"],
+            "commands_limit": plan_config["commands_per_day"],
+        },
+        "features": plan_config["features"],
+    }
+
+
+@app.post("/billing/checkout")
+async def create_checkout(
+    request: CheckoutRequest,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """Create a Stripe checkout session for upgrading."""
+    user = await get_current_user(authorization)
+    if not user:
+        return {"status": "error", "message": "Must be logged in to upgrade"}
+    result = await create_checkout_session(
+        user_id=user["id"],
+        plan=request.plan,
+        interval=request.interval,
+        success_url=request.success_url,
+        cancel_url=request.cancel_url,
+    )
+    return result
+
+
+@app.post("/billing/portal")
+async def billing_portal(
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """Create a Stripe customer portal session."""
+    user = await get_current_user(authorization)
+    if not user:
+        return {"status": "error", "message": "Not authenticated"}
+    stripe_id = user.get("stripe_customer_id", "")
+    if not stripe_id:
+        return {"status": "error", "message": "No active subscription"}
+    result = await create_portal_session(stripe_id)
+    return result
+
+
+@app.post("/billing/webhook")
+async def stripe_webhook(request: Request) -> dict:
+    """Handle Stripe webhook events."""
+    body = await request.json()
+    event_type = body.get("type", "")
+    data = body.get("data", {}).get("object", {})
+
+    result = handle_webhook_event(event_type, data)
+
+    if result["action"] == "upgrade":
+        user_id = result.get("user_id", 0)
+        if user_id:
+            await update_user_plan(
+                user_id=user_id,
+                plan=result["plan"],
+                stripe_customer_id=result.get("stripe_customer_id", ""),
+                stripe_subscription_id=result.get("stripe_subscription_id", ""),
+            )
+    elif result["action"] == "downgrade":
+        user = await get_user_by_stripe_customer(result.get("stripe_customer_id", ""))
+        if user:
+            await update_user_plan(user_id=user["id"], plan="free")
+    elif result["action"] == "payment_failed":
+        logger.warning("Payment failed for customer %s", result.get("stripe_customer_id"))
+
+    return {"status": "received"}
+
+
+# Owner/admin override — set any user's plan without Stripe
+@app.post("/billing/set-plan")
+async def admin_set_plan(
+    authorization: str | None = Header(default=None),
+    user_id: int = 0,
+    plan: str = "pro",
+) -> dict:
+    """Admin: manually set a user's plan (bypasses Stripe)."""
+    admin = await get_current_user(authorization)
+    if not admin:
+        return {"status": "error", "message": "Not authenticated"}
+    # For now, user 1 (first registered) is admin
+    if admin["id"] != 1:
+        return {"status": "error", "message": "Admin access required"}
+    target_id = user_id if user_id else admin["id"]
+    if plan not in PLANS:
+        return {"status": "error", "message": f"Unknown plan: {plan}"}
+    await update_user_plan(user_id=target_id, plan=plan)
+    return {"status": "success", "message": f"Plan set to {plan} for user {target_id}"}
 
 
 if __name__ == "__main__":

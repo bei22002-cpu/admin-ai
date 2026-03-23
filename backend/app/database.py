@@ -32,6 +32,9 @@ def init_db() -> None:
             username TEXT UNIQUE NOT NULL,
             email TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
+            plan TEXT NOT NULL DEFAULT 'free',
+            stripe_customer_id TEXT DEFAULT '',
+            stripe_subscription_id TEXT DEFAULT '',
             created_at REAL NOT NULL DEFAULT (strftime('%s', 'now'))
         );
 
@@ -52,6 +55,19 @@ def init_db() -> None:
 
         CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id);
     """)
+    # Migrate: add plan columns if missing (safe for existing DBs)
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN plan TEXT NOT NULL DEFAULT 'free'")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN stripe_customer_id TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN stripe_subscription_id TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
 
@@ -89,7 +105,42 @@ async def get_user_by_email(email: str) -> dict[str, Any] | None:
 async def get_user_by_id(user_id: int) -> dict[str, Any] | None:
     """Get user by ID."""
     conn = _get_conn()
-    row = conn.execute("SELECT id, username, email, created_at FROM users WHERE id = ?", (user_id,)).fetchone()
+    row = conn.execute(
+        "SELECT id, username, email, plan, stripe_customer_id, stripe_subscription_id, created_at "
+        "FROM users WHERE id = ?",
+        (user_id,),
+    ).fetchone()
+    conn.close()
+    if row:
+        return dict(row)
+    return None
+
+
+async def update_user_plan(
+    user_id: int,
+    plan: str,
+    stripe_customer_id: str = "",
+    stripe_subscription_id: str = "",
+) -> None:
+    """Update a user's subscription plan."""
+    async with _db_lock:
+        conn = _get_conn()
+        conn.execute(
+            "UPDATE users SET plan = ?, stripe_customer_id = ?, stripe_subscription_id = ? WHERE id = ?",
+            (plan, stripe_customer_id, stripe_subscription_id, user_id),
+        )
+        conn.commit()
+        conn.close()
+
+
+async def get_user_by_stripe_customer(stripe_customer_id: str) -> dict[str, Any] | None:
+    """Get user by Stripe customer ID."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT id, username, email, plan, stripe_customer_id, stripe_subscription_id, created_at "
+        "FROM users WHERE stripe_customer_id = ?",
+        (stripe_customer_id,),
+    ).fetchone()
     conn.close()
     if row:
         return dict(row)

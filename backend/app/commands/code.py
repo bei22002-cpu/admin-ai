@@ -154,15 +154,28 @@ def _get_api_key(provider: str) -> str:
     """Get the API key for a specific provider."""
     if provider == "anthropic":
         return os.getenv("ANTHROPIC_API_KEY", "")
+    if provider == "ollama":
+        return "ollama-local"  # No key needed for local Ollama
     return os.getenv("OPENAI_API_KEY", "")
 
 
 def _get_fallback_provider(primary: str) -> str | None:
     """Return the other provider if its API key is configured, else None."""
+    # Ollama is local-only; try cloud providers as fallback
+    if primary == "ollama":
+        for other in ("anthropic", "openai"):
+            key = _get_api_key(other)
+            if key and not key.startswith("your-") and key != "ollama-local":
+                return other
+        return None
     other = "openai" if primary == "anthropic" else "anthropic"
     key = _get_api_key(other)
     if key and not key.startswith("your-"):
         return other
+    # Try Ollama as last-resort fallback if configured
+    ollama_url = os.getenv("OLLAMA_URL", "")
+    if ollama_url:
+        return "ollama"
     return None
 
 
@@ -191,22 +204,31 @@ async def _call_ai(
             logger.warning("Primary provider in cooldown, routing to %s", primary)
 
     # Try primary provider
-    call_fn = _call_anthropic if primary == "anthropic" else _call_openai
+    call_fn = _get_call_fn(primary)
     primary_key = _get_api_key(primary) or api_key
     result = await call_fn(messages, primary_key, max_tokens, use_heavy_model)
 
     # If primary hit rate limit and we have a fallback, try it immediately
-    if result.startswith("AI error: max retries exceeded") and fallback:
+    if result.startswith("AI error") and fallback:
         fallback_key = _get_api_key(fallback)
         if fallback_key and not fallback_key.startswith("your-"):
             logger.warning(
-                "Provider %s exhausted retries, failing over to %s",
+                "Provider %s failed, failing over to %s",
                 primary, fallback,
             )
-            call_fn = _call_anthropic if fallback == "anthropic" else _call_openai
+            call_fn = _get_call_fn(fallback)
             result = await call_fn(messages, fallback_key, max_tokens, use_heavy_model)
 
     return result
+
+
+def _get_call_fn(provider: str):
+    """Return the appropriate call function for a provider."""
+    if provider == "anthropic":
+        return _call_anthropic
+    if provider == "ollama":
+        return _call_ollama
+    return _call_openai
 
 
 async def _call_openai(
@@ -332,6 +354,69 @@ async def _call_anthropic(
                 return f"AI error (timeout after {_MAX_RETRIES} retries): {exc}"
     _provider_rate_limit_until["anthropic"] = time.time() + 60
     return "AI error: max retries exceeded (rate limit)"
+
+
+async def _call_ollama(
+    messages: list[dict],
+    api_key: str,
+    max_tokens: int = 2500,
+    use_heavy_model: bool = False,
+) -> str:
+    """Call local Ollama instance. Uses configurable models."""
+    base_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
+    heavy_model = os.getenv("OLLAMA_HEAVY_MODEL", "llama3:70b")
+    light_model = os.getenv("OLLAMA_LIGHT_MODEL", "llama3:8b")
+    model = heavy_model if use_heavy_model else light_model
+    timeout = 300.0 if use_heavy_model else 120.0
+
+    for attempt in range(_MAX_RETRIES):
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            try:
+                response = await client.post(
+                    f"{base_url}/api/chat",
+                    json={
+                        "model": model,
+                        "messages": messages,
+                        "stream": False,
+                        "options": {
+                            "num_predict": max_tokens,
+                            "temperature": 0.15 if use_heavy_model else 0.2,
+                        },
+                    },
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    content = data.get("message", {}).get("content", "")
+                    return content if content else "No response from local AI."
+                if response.status_code == 404:
+                    return (
+                        f"AI error: Ollama model '{model}' not found. "
+                        f"Run: ollama pull {model}"
+                    )
+                if response.status_code >= 500:
+                    delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning(
+                        "Ollama server error %d, retrying in %.1fs",
+                        response.status_code, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                return f"AI error (Ollama HTTP {response.status_code}): {response.text[:300]}"
+            except httpx.ConnectError:
+                return (
+                    "AI error: Cannot connect to Ollama. "
+                    "Make sure Ollama is running: ollama serve"
+                )
+            except httpx.TimeoutException as exc:
+                if attempt < _MAX_RETRIES - 1:
+                    delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning(
+                        "Ollama request timed out, retrying in %.1fs", delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                return f"AI error (Ollama timeout after {_MAX_RETRIES} retries): {exc}"
+    return "AI error: Ollama max retries exceeded"
 
 
 # ─── Code Parsing ────────────────────────────────────────────────
