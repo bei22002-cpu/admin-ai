@@ -3,6 +3,9 @@ import {
   Terminal, LogIn, UserPlus, Code, Search, Shield, Wifi, Bell,
   BarChart3, Eye, History, LogOut, Send, Loader2, Zap, ChevronRight,
   Clock, FileCode, ArrowRight, User as UserIcon, X,
+  GitBranch, FolderOpen, CalendarClock, TestTube2, FileText,
+  Database, Puzzle, Image, Mic, Clipboard, BellRing, Users,
+  Smartphone, Play, FlaskConical, TerminalSquare, MessageSquare,
 } from "lucide-react";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
@@ -201,6 +204,7 @@ function AuthScreen({ onAuth }: { onAuth: (token: string, user: User) => void })
 
 // ─── Sidebar Commands ────────────────────────────────────────
 const COMMANDS = [
+  // Core
   { cmd: "code", icon: Code, label: "Code", desc: "Generate programs" },
   { cmd: "search", icon: Search, label: "Search", desc: "AI-powered search" },
   { cmd: "access", icon: Shield, label: "Access", desc: "System access" },
@@ -208,6 +212,27 @@ const COMMANDS = [
   { cmd: "alert", icon: Bell, label: "Alert", desc: "Set alerts" },
   { cmd: "report", icon: BarChart3, label: "Report", desc: "System report" },
   { cmd: "analyze", icon: Eye, label: "Analyze", desc: "Screen analysis" },
+  // AI Coding
+  { cmd: "review", icon: MessageSquare, label: "Review", desc: "Code review" },
+  { cmd: "test", icon: FlaskConical, label: "Tests", desc: "Generate tests" },
+  { cmd: "preview", icon: Play, label: "Preview", desc: "Live preview" },
+  { cmd: "github", icon: GitBranch, label: "GitHub", desc: "Git integration" },
+  { cmd: "docs", icon: FileText, label: "Docs", desc: "Generate docs" },
+  { cmd: "template", icon: FileCode, label: "Templates", desc: "Project scaffolds" },
+  // Productivity
+  { cmd: "files", icon: FolderOpen, label: "Files", desc: "File management" },
+  { cmd: "shell", icon: TerminalSquare, label: "Shell", desc: "Shell assistant" },
+  { cmd: "schedule", icon: CalendarClock, label: "Schedule", desc: "Task scheduling" },
+  { cmd: "notify", icon: BellRing, label: "Notify", desc: "Notifications" },
+  { cmd: "clip", icon: Clipboard, label: "Clipboard", desc: "Clip manager" },
+  { cmd: "db", icon: Database, label: "Database", desc: "DB management" },
+  { cmd: "apitest", icon: TestTube2, label: "API Test", desc: "Test APIs" },
+  // Platform
+  { cmd: "plugin", icon: Puzzle, label: "Plugins", desc: "Custom plugins" },
+  { cmd: "gallery", icon: Image, label: "Gallery", desc: "Project gallery" },
+  { cmd: "collab", icon: Users, label: "Collab", desc: "Collaboration" },
+  { cmd: "voice", icon: Mic, label: "Voice", desc: "Voice commands" },
+  { cmd: "mobile", icon: Smartphone, label: "Mobile", desc: "Mobile access" },
 ];
 
 // ─── Console Screen ──────────────────────────────────────────
