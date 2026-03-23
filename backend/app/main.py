@@ -278,6 +278,8 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             })
     except WebSocketDisconnect:
         connected_clients.remove(websocket)
+    except Exception:
+        connected_clients.remove(websocket)
 
 
 if __name__ == "__main__":
