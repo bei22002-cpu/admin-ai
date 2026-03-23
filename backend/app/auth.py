@@ -4,8 +4,8 @@ import os
 import time
 from typing import Any
 
+import bcrypt as _bcrypt
 import jwt
-from passlib.hash import bcrypt
 
 SECRET_KEY = os.getenv("MCP_JWT_SECRET", "mcp-grid-secret-change-in-production")
 ALGORITHM = "HS256"
@@ -14,12 +14,12 @@ TOKEN_EXPIRE_SECONDS = 86400 * 7  # 7 days
 
 def hash_password(password: str) -> str:
     """Hash a password with bcrypt."""
-    return bcrypt.hash(password)
+    return _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
 
 
 def verify_password(password: str, hashed: str) -> bool:
     """Verify a password against its hash."""
-    return bcrypt.verify(password, hashed)
+    return _bcrypt.checkpw(password.encode(), hashed.encode())
 
 
 def create_token(user_id: int, username: str) -> str:
