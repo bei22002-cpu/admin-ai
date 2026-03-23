@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Terminal, LogIn, UserPlus, Code, Search, Shield, Wifi, Bell, BarChart3, Eye, History, LogOut, Send, Loader2 } from "lucide-react";
+import {
+  Terminal, LogIn, UserPlus, Code, Search, Shield, Wifi, Bell,
+  BarChart3, Eye, History, LogOut, Send, Loader2, Zap, ChevronRight,
+  Clock, FileCode, ArrowRight, User as UserIcon, X,
+} from "lucide-react";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -64,99 +68,132 @@ function AuthScreen({ onAuth }: { onAuth: (token: string, user: User) => void })
   };
 
   return (
-    <div className="min-h-screen grid-bg flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
+    <div className="min-h-screen auth-bg flex items-center justify-center p-4">
+      <div className="w-full max-w-sm fade-in">
         {/* Logo */}
-        <div className="text-center mb-8">
-          <h1 className="text-5xl font-bold tron-text tracking-widest">MCP</h1>
-          <p className="text-sm text-orange-400/60 mt-2 tracking-widest uppercase">
+        <div className="text-center mb-10">
+          <div className="inline-flex items-center gap-3 mb-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500 to-orange-600 flex items-center justify-center shadow-lg shadow-orange-500/20">
+              <Zap className="w-5 h-5 text-white" />
+            </div>
+            <h1 className="text-4xl font-bold gradient-text tracking-tight" style={{ fontFamily: "'Inter', sans-serif" }}>
+              MCP
+            </h1>
+          </div>
+          <p className="text-xs text-zinc-500 tracking-widest uppercase font-medium">
             Grid Control System
           </p>
-          <div className="w-24 h-px bg-gradient-to-r from-transparent via-orange-500 to-transparent mx-auto mt-4" />
+          <div className="accent-divider w-16 mx-auto mt-5" />
         </div>
 
         {/* Auth Card */}
-        <div className="tron-border tron-glow rounded-lg p-6">
-          <div className="flex mb-6">
+        <div className="glass-card accent-glow p-7">
+          {/* Tabs */}
+          <div className="flex gap-1 mb-7 p-1 rounded-lg bg-black/20">
             <button
               onClick={() => setMode("login")}
-              className={`flex-1 py-2 text-sm tracking-wider border-b-2 transition-colors ${
+              className={`flex-1 py-2.5 text-xs font-medium tracking-wider rounded-md transition-all ${
                 mode === "login"
-                  ? "border-orange-500 text-orange-400"
-                  : "border-transparent text-gray-500 hover:text-gray-400"
+                  ? "bg-gradient-to-r from-orange-500/15 to-orange-600/10 text-orange-400 shadow-sm"
+                  : "text-zinc-500 hover:text-zinc-400"
               }`}
             >
-              <LogIn className="inline w-4 h-4 mr-1" /> ACCESS
+              <LogIn className="inline w-3.5 h-3.5 mr-1.5 -mt-0.5" /> Sign In
             </button>
             <button
               onClick={() => setMode("signup")}
-              className={`flex-1 py-2 text-sm tracking-wider border-b-2 transition-colors ${
+              className={`flex-1 py-2.5 text-xs font-medium tracking-wider rounded-md transition-all ${
                 mode === "signup"
-                  ? "border-orange-500 text-orange-400"
-                  : "border-transparent text-gray-500 hover:text-gray-400"
+                  ? "bg-gradient-to-r from-orange-500/15 to-orange-600/10 text-orange-400 shadow-sm"
+                  : "text-zinc-500 hover:text-zinc-400"
               }`}
             >
-              <UserPlus className="inline w-4 h-4 mr-1" /> REGISTER
+              <UserPlus className="inline w-3.5 h-3.5 mr-1.5 -mt-0.5" /> Register
             </button>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-3.5">
             {mode === "signup" && (
+              <div>
+                <label className="block text-xs text-zinc-500 mb-1.5 font-medium tracking-wide">Username</label>
+                <input
+                  type="text"
+                  placeholder="Enter your username"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className="pro-input w-full px-4 py-3 rounded-lg"
+                  required
+                />
+              </div>
+            )}
+            <div>
+              <label className="block text-xs text-zinc-500 mb-1.5 font-medium tracking-wide">Email</label>
               <input
-                type="text"
-                placeholder="USERNAME"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="tron-input w-full px-4 py-3 rounded text-sm tracking-wider"
+                type="email"
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="pro-input w-full px-4 py-3 rounded-lg"
                 required
               />
-            )}
-            <input
-              type="email"
-              placeholder="EMAIL"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="tron-input w-full px-4 py-3 rounded text-sm tracking-wider"
-              required
-            />
-            <input
-              type="password"
-              placeholder="PASSWORD"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="tron-input w-full px-4 py-3 rounded text-sm tracking-wider"
-              required
-            />
+            </div>
+            <div>
+              <label className="block text-xs text-zinc-500 mb-1.5 font-medium tracking-wide">Password</label>
+              <input
+                type="password"
+                placeholder="Enter your password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="pro-input w-full px-4 py-3 rounded-lg"
+                required
+              />
+            </div>
             {error && (
-              <p className="text-red-400 text-xs tracking-wider">{error}</p>
+              <div className="flex items-center gap-2 text-red-400 text-xs bg-red-500/8 px-3 py-2 rounded-lg border border-red-500/15">
+                <X className="w-3.5 h-3.5 shrink-0" />
+                {error}
+              </div>
             )}
             <button
               type="submit"
               disabled={loading}
-              className="tron-btn w-full py-3 rounded text-sm flex items-center justify-center gap-2"
+              className="pro-btn pro-btn-filled w-full py-3 rounded-lg text-sm flex items-center justify-center gap-2 mt-2"
             >
               {loading ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
-              ) : mode === "login" ? (
-                <>
-                  <LogIn className="w-4 h-4" /> INITIALIZE
-                </>
               ) : (
                 <>
-                  <UserPlus className="w-4 h-4" /> CREATE IDENTITY
+                  {mode === "login" ? "Sign In" : "Create Account"}
+                  <ArrowRight className="w-4 h-4" />
                 </>
               )}
             </button>
           </form>
 
+          {/* Divider */}
+          <div className="flex items-center gap-3 my-5">
+            <div className="flex-1 h-px bg-zinc-800" />
+            <span className="text-xs text-zinc-600">or</span>
+            <div className="flex-1 h-px bg-zinc-800" />
+          </div>
+
           {/* Guest access */}
           <button
             onClick={() => onAuth("", { id: 0, username: "guest", email: "" })}
-            className="w-full mt-4 py-2 text-xs text-gray-500 hover:text-gray-400 tracking-wider transition-colors"
+            className="pro-btn w-full py-2.5 rounded-lg text-xs flex items-center justify-center gap-2"
           >
-            CONTINUE AS GUEST (no project history)
+            <UserIcon className="w-3.5 h-3.5" />
+            Continue as Guest
           </button>
+          <p className="text-center text-xs text-zinc-600 mt-2">
+            Guest mode does not save project history
+          </p>
         </div>
+
+        {/* Footer */}
+        <p className="text-center text-xs text-zinc-700 mt-6">
+          Powered by AI &middot; Built on the Grid
+        </p>
       </div>
     </div>
   );
@@ -164,13 +201,13 @@ function AuthScreen({ onAuth }: { onAuth: (token: string, user: User) => void })
 
 // ─── Sidebar Commands ────────────────────────────────────────
 const COMMANDS = [
-  { cmd: "code", icon: Code, label: "CODE", desc: "Generate programs" },
-  { cmd: "search", icon: Search, label: "SEARCH", desc: "AI-powered search" },
-  { cmd: "access", icon: Shield, label: "ACCESS", desc: "System access" },
-  { cmd: "scan", icon: Wifi, label: "SCAN", desc: "Network scan" },
-  { cmd: "alert", icon: Bell, label: "ALERT", desc: "Set alerts" },
-  { cmd: "report", icon: BarChart3, label: "REPORT", desc: "System report" },
-  { cmd: "analyze", icon: Eye, label: "ANALYZE", desc: "Screen analysis" },
+  { cmd: "code", icon: Code, label: "Code", desc: "Generate programs" },
+  { cmd: "search", icon: Search, label: "Search", desc: "AI-powered search" },
+  { cmd: "access", icon: Shield, label: "Access", desc: "System access" },
+  { cmd: "scan", icon: Wifi, label: "Scan", desc: "Network scan" },
+  { cmd: "alert", icon: Bell, label: "Alert", desc: "Set alerts" },
+  { cmd: "report", icon: BarChart3, label: "Report", desc: "System report" },
+  { cmd: "analyze", icon: Eye, label: "Analyze", desc: "Screen analysis" },
 ];
 
 // ─── Console Screen ──────────────────────────────────────────
@@ -315,161 +352,203 @@ function ConsoleScreen({
     }
   };
 
+  const formatTime = (ts: number) => {
+    return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  };
+
   return (
-    <div className="min-h-screen grid-bg flex">
+    <div className="h-screen grid-bg flex overflow-hidden">
       {/* Sidebar */}
-      <div className="w-56 tron-border border-t-0 border-b-0 border-l-0 flex flex-col">
+      <div className="w-60 sidebar flex flex-col shrink-0">
         {/* Logo */}
-        <div className="p-4 border-b border-orange-500/20">
-          <div className="flex items-center gap-2">
-            <Terminal className="w-5 h-5 text-orange-500" />
-            <span className="text-xl font-bold tron-text tracking-widest">MCP</span>
-            <span className="text-xs text-gray-500 tracking-wider">GRID</span>
+        <div className="px-5 py-4">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-500 to-orange-600 flex items-center justify-center shadow-lg shadow-orange-500/15">
+              <Zap className="w-4 h-4 text-white" />
+            </div>
+            <div>
+              <span className="text-base font-semibold gradient-text tracking-tight">MCP Grid</span>
+            </div>
           </div>
-          <div className="flex items-center gap-2 mt-2">
+          {/* Status */}
+          <div className="flex items-center gap-2 mt-3 ml-0.5">
             <div
-              className={`w-2 h-2 rounded-full ${
+              className={`w-1.5 h-1.5 rounded-full ${
                 status === "online"
-                  ? "bg-green-400"
+                  ? "bg-emerald-400 shadow-sm shadow-emerald-400/50"
                   : status === "processing"
-                  ? "bg-orange-400 tron-pulse"
-                  : "bg-red-400"
+                  ? "bg-orange-400 pulse-glow shadow-sm shadow-orange-400/50"
+                  : "bg-red-400 shadow-sm shadow-red-400/50"
               }`}
             />
-            <span className="text-xs text-gray-500 uppercase tracking-wider">
-              {status === "online" ? "ONLINE" : status === "processing" ? "PROCESSING" : "OFFLINE"}
+            <span className="text-xs text-zinc-500 font-medium">
+              {status === "online" ? "Online" : status === "processing" ? "Processing" : "Offline"}
             </span>
           </div>
         </div>
 
+        <div className="accent-divider mx-4" />
+
         {/* Commands */}
-        <div className="flex-1 p-2 overflow-y-auto">
-          <p className="text-xs text-gray-600 px-2 py-1 tracking-widest">COMMANDS</p>
-          {COMMANDS.map(({ cmd, icon: Icon, label }) => (
-            <button
-              key={cmd}
-              onClick={() => {
-                setInput(`${cmd} `);
-                document.getElementById("cmd-input")?.focus();
-              }}
-              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-400 hover:text-orange-400 hover:bg-orange-500/5 rounded transition-colors"
-            >
-              <Icon className="w-4 h-4" />
-              <span className="tracking-wider">{label}</span>
-            </button>
-          ))}
+        <div className="flex-1 px-3 py-3 overflow-y-auto">
+          <p className="text-xs text-zinc-600 px-2 py-1.5 font-semibold tracking-wider uppercase">Commands</p>
+          <div className="space-y-0.5 mt-1">
+            {COMMANDS.map(({ cmd, icon: Icon, label, desc }) => (
+              <button
+                key={cmd}
+                onClick={() => {
+                  setInput(`${cmd} `);
+                  document.getElementById("cmd-input")?.focus();
+                }}
+                className="cmd-btn w-full flex items-center gap-2.5 px-3 py-2 text-sm text-zinc-400 hover:text-orange-400 group"
+              >
+                <Icon className="w-4 h-4 text-zinc-600 group-hover:text-orange-500 transition-colors" />
+                <div className="flex flex-col items-start">
+                  <span className="font-medium text-xs">{label}</span>
+                  <span className="text-xs text-zinc-600 group-hover:text-zinc-500 transition-colors">{desc}</span>
+                </div>
+                <ChevronRight className="w-3 h-3 ml-auto opacity-0 group-hover:opacity-50 transition-opacity text-orange-500" />
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* History toggle */}
-        <div className="p-2 border-t border-orange-500/20">
-          {token && (
-            <button
-              onClick={() => setShowHistory(!showHistory)}
-              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-400 hover:text-orange-400 hover:bg-orange-500/5 rounded transition-colors"
-            >
-              <History className="w-4 h-4" />
-              <span className="tracking-wider">HISTORY</span>
-              {projects.length > 0 && (
-                <span className="ml-auto text-xs text-orange-500/60">{projects.length}</span>
-              )}
-            </button>
-          )}
-        </div>
+        {token && (
+          <>
+            <div className="accent-divider mx-4" />
+            <div className="px-3 py-2">
+              <button
+                onClick={() => setShowHistory(!showHistory)}
+                className={`cmd-btn w-full flex items-center gap-2.5 px-3 py-2 text-sm group ${
+                  showHistory ? "text-orange-400 bg-orange-500/8" : "text-zinc-400 hover:text-orange-400"
+                }`}
+              >
+                <History className={`w-4 h-4 ${showHistory ? "text-orange-500" : "text-zinc-600 group-hover:text-orange-500"} transition-colors`} />
+                <span className="font-medium text-xs">History</span>
+                {projects.length > 0 && (
+                  <span className="ml-auto status-badge bg-orange-500/15 text-orange-400">{projects.length}</span>
+                )}
+              </button>
+            </div>
+          </>
+        )}
 
         {/* User info */}
-        <div className="p-3 border-t border-orange-500/20">
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-gray-500 tracking-wider truncate">
-              {user.username.toUpperCase()}
-            </span>
+        <div className="accent-divider mx-4" />
+        <div className="px-4 py-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-zinc-700 to-zinc-800 flex items-center justify-center border border-zinc-700/50">
+              <UserIcon className="w-3.5 h-3.5 text-zinc-400" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-medium text-zinc-300 truncate">
+                {user.username.charAt(0).toUpperCase() + user.username.slice(1)}
+              </p>
+              {user.email && (
+                <p className="text-xs text-zinc-600 truncate">{user.email}</p>
+              )}
+            </div>
             <button
               onClick={onLogout}
-              className="text-gray-600 hover:text-red-400 transition-colors"
-              title="Logout"
+              className="text-zinc-600 hover:text-red-400 transition-colors p-1 rounded-md hover:bg-red-500/5"
+              title="Sign out"
             >
-              <LogOut className="w-4 h-4" />
+              <LogOut className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
       </div>
 
       {/* Main content area */}
-      <div className="flex-1 flex">
+      <div className="flex-1 flex min-w-0">
         {/* Console */}
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col min-w-0">
           {/* Header */}
-          <div className="px-4 py-2 border-b border-orange-500/20 flex items-center justify-between">
-            <span className="text-xs text-gray-500 tracking-widest">GRID CONSOLE</span>
-            <span className="text-xs text-gray-600">
-              {new Date().toLocaleTimeString()}
-            </span>
+          <div className="px-5 py-3 border-b border-zinc-800/80 flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-2.5">
+              <Terminal className="w-4 h-4 text-zinc-600" />
+              <span className="text-sm font-medium text-zinc-400">Console</span>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-zinc-600">
+              <Clock className="w-3 h-3" />
+              {new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </div>
           </div>
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
             {messages.map((msg, i) => (
-              <div key={i} className="flex gap-3">
+              <div key={i} className="flex gap-3 fade-in">
+                {/* Tag */}
                 <span
-                  className={`text-xs font-bold mt-0.5 shrink-0 tracking-wider ${
+                  className={`msg-tag mt-0.5 shrink-0 ${
                     msg.type === "user"
-                      ? "text-green-400"
+                      ? "bg-emerald-500/10 text-emerald-400"
                       : msg.type === "mcp"
-                      ? "text-orange-400"
+                      ? "bg-orange-500/10 text-orange-400"
                       : msg.type === "error"
-                      ? "text-red-400"
-                      : "text-cyan-400/60"
+                      ? "bg-red-500/10 text-red-400"
+                      : "bg-cyan-500/8 text-cyan-400/70"
                   }`}
                 >
-                  [{msg.type === "user" ? "USER" : msg.type === "mcp" ? "MCP" : msg.type === "error" ? "ERR" : "SYS"}]
+                  {msg.type === "user" ? "YOU" : msg.type === "mcp" ? "MCP" : msg.type === "error" ? "ERR" : "SYS"}
                 </span>
-                <div className="flex-1">
-                  <p
-                    className={`text-sm whitespace-pre-wrap ${
-                      msg.type === "system" ? "text-cyan-400/50" : ""
-                    }`}
-                  >
-                    {msg.text}
-                  </p>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-baseline gap-2">
+                    <p
+                      className={`text-sm whitespace-pre-wrap leading-relaxed ${
+                        msg.type === "system"
+                          ? "text-cyan-400/40 italic"
+                          : msg.type === "error"
+                          ? "text-red-300/80"
+                          : "text-zinc-300"
+                      }`}
+                    >
+                      {msg.text}
+                    </p>
+                    <span className="text-xs text-zinc-700 shrink-0">{formatTime(msg.timestamp)}</span>
+                  </div>
                   {msg.data && (
-                    <div className="mt-2 tron-border rounded p-3 text-xs space-y-1">
+                    <div className="mt-2 data-panel text-xs">
                       {!!msg.data.status && (
-                        <div>
-                          <span className="text-gray-500">STATUS: </span>
+                        <div className="data-row">
+                          <span className="text-zinc-500 w-16 shrink-0">Status</span>
                           <span
-                            className={
+                            className={`status-badge ${
                               msg.data.status === "success"
-                                ? "text-green-400"
+                                ? "bg-emerald-500/15 text-emerald-400"
                                 : msg.data.status === "partial"
-                                ? "text-yellow-400"
-                                : "text-red-400"
-                            }
+                                ? "bg-yellow-500/15 text-yellow-400"
+                                : "bg-red-500/15 text-red-400"
+                            }`}
                           >
-                            {String(msg.data.status).toUpperCase()}
+                            {String(msg.data.status)}
                           </span>
                         </div>
                       )}
                       {msg.data.file_count !== undefined && (
-                        <div>
-                          <span className="text-gray-500">FILES: </span>
-                          <span className="text-orange-400">{String(msg.data.file_count)}</span>
+                        <div className="data-row">
+                          <span className="text-zinc-500 w-16 shrink-0">Files</span>
+                          <span className="text-orange-400 font-medium">{String(msg.data.file_count)}</span>
                         </div>
                       )}
                       {!!msg.data.language && (
-                        <div>
-                          <span className="text-gray-500">LANGUAGE: </span>
-                          <span className="text-cyan-400">{String(msg.data.language)}</span>
+                        <div className="data-row">
+                          <span className="text-zinc-500 w-16 shrink-0">Lang</span>
+                          <span className="text-cyan-400 font-medium">{String(msg.data.language)}</span>
                         </div>
                       )}
                       {!!msg.data.model && (
-                        <div>
-                          <span className="text-gray-500">MODEL: </span>
-                          <span className="text-gray-400">{String(msg.data.model)}</span>
+                        <div className="data-row">
+                          <span className="text-zinc-500 w-16 shrink-0">Model</span>
+                          <span className="text-zinc-400 font-mono text-xs">{String(msg.data.model)}</span>
                         </div>
                       )}
                       {!!msg.data.output && (
-                        <div className="mt-2">
-                          <span className="text-gray-500">OUTPUT:</span>
-                          <pre className="mt-1 p-2 bg-black/40 rounded text-green-300 overflow-x-auto max-h-48 overflow-y-auto">
+                        <div className="p-3 border-t border-zinc-800/50">
+                          <span className="text-zinc-500 text-xs font-medium">Output</span>
+                          <pre className="mt-2 p-3 bg-black/30 rounded-md text-emerald-300/90 overflow-x-auto max-h-48 overflow-y-auto font-mono text-xs leading-relaxed">
                             {String(msg.data.output).slice(0, 1000)}
                           </pre>
                         </div>
@@ -480,35 +559,41 @@ function ConsoleScreen({
               </div>
             ))}
             {loading && (
-              <div className="flex items-center gap-2 text-orange-400/60">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span className="text-sm tron-pulse tracking-wider">Processing...</span>
+              <div className="flex items-center gap-3 py-2 fade-in">
+                <div className="msg-tag bg-orange-500/10 text-orange-400">MCP</div>
+                <div className="flex items-center gap-2">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-orange-400" />
+                  <span className="text-sm text-zinc-500">Processing your request...</span>
+                </div>
               </div>
             )}
             <div ref={messagesEndRef} />
           </div>
 
           {/* Input */}
-          <div className="p-4 border-t border-orange-500/20">
-            <div className="flex gap-2">
-              <span className="text-orange-500 text-sm mt-2.5 shrink-0 tracking-wider">MCP&gt;</span>
+          <div className="px-5 py-4 border-t border-zinc-800/80 shrink-0">
+            <div className="flex gap-2 items-center">
+              <div className="flex items-center gap-1.5 shrink-0">
+                <ChevronRight className="w-4 h-4 text-orange-500" />
+              </div>
               <input
                 id="cmd-input"
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder='Enter command... (e.g., "code a REST API", "search quantum computing")'
-                className="tron-input flex-1 px-3 py-2 rounded text-sm"
+                placeholder="Type a command... (e.g., code a REST API)"
+                className="pro-input flex-1 px-4 py-2.5 rounded-lg text-sm"
                 disabled={loading}
                 autoFocus
               />
               <button
                 onClick={() => sendCommand(input)}
                 disabled={loading || !input.trim()}
-                className="tron-btn px-4 py-2 rounded flex items-center gap-1"
+                className="pro-btn px-4 py-2.5 rounded-lg flex items-center gap-1.5 shrink-0"
               >
-                <Send className="w-4 h-4" />
+                <Send className="w-3.5 h-3.5" />
+                <span className="text-xs font-medium hidden sm:inline">Send</span>
               </button>
             </div>
           </div>
@@ -516,45 +601,67 @@ function ConsoleScreen({
 
         {/* Project History Panel */}
         {showHistory && token && (
-          <div className="w-72 border-l border-orange-500/20 flex flex-col">
-            <div className="p-3 border-b border-orange-500/20">
-              <span className="text-xs text-gray-500 tracking-widest">PROJECT HISTORY</span>
+          <div className="w-80 border-l border-zinc-800/80 flex flex-col shrink-0 slide-in-right" style={{ background: "rgba(14,14,20,0.6)" }}>
+            <div className="px-5 py-3 border-b border-zinc-800/80 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2">
+                <FileCode className="w-4 h-4 text-zinc-600" />
+                <span className="text-sm font-medium text-zinc-400">Project History</span>
+              </div>
+              <button onClick={() => setShowHistory(false)} className="text-zinc-600 hover:text-zinc-400 transition-colors">
+                <X className="w-4 h-4" />
+              </button>
             </div>
-            <div className="flex-1 overflow-y-auto p-2 space-y-2">
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
               {projects.length === 0 ? (
-                <p className="text-xs text-gray-600 p-3 text-center">
-                  No projects yet. Use the CODE command to generate one.
-                </p>
+                <div className="text-center py-12 px-4">
+                  <FileCode className="w-8 h-8 text-zinc-700 mx-auto mb-3" />
+                  <p className="text-sm text-zinc-600 mb-1">No projects yet</p>
+                  <p className="text-xs text-zinc-700">
+                    Use the Code command to generate your first project
+                  </p>
+                </div>
               ) : (
                 projects.map((proj) => (
                   <div
                     key={proj.id}
-                    className="tron-border rounded p-3 text-xs space-y-1 hover:bg-orange-500/5 cursor-pointer transition-colors"
+                    className="glass-card p-3.5 text-xs space-y-2 hover:border-orange-500/20 cursor-pointer transition-all group"
+                    style={{ borderRadius: "10px" }}
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="text-orange-400 truncate font-bold">
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="text-zinc-200 truncate font-medium text-sm group-hover:text-orange-400 transition-colors">
                         {proj.name}
                       </span>
                       <span
-                        className={`text-xs px-1.5 py-0.5 rounded ${
+                        className={`status-badge shrink-0 ${
                           proj.status === "success"
-                            ? "bg-green-500/20 text-green-400"
+                            ? "bg-emerald-500/15 text-emerald-400"
                             : proj.status === "processing"
-                            ? "bg-orange-500/20 text-orange-400"
+                            ? "bg-orange-500/15 text-orange-400"
                             : proj.status === "partial"
-                            ? "bg-yellow-500/20 text-yellow-400"
-                            : "bg-red-500/20 text-red-400"
+                            ? "bg-yellow-500/15 text-yellow-400"
+                            : "bg-red-500/15 text-red-400"
                         }`}
                       >
                         {proj.status}
                       </span>
                     </div>
-                    <div className="text-gray-500 flex gap-3">
-                      <span>{proj.file_count} files</span>
-                      <span>{proj.language}</span>
+                    <div className="flex items-center gap-3 text-zinc-600">
+                      <span className="flex items-center gap-1">
+                        <FileCode className="w-3 h-3" />
+                        {proj.file_count} files
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Code className="w-3 h-3" />
+                        {proj.language}
+                      </span>
                     </div>
-                    <div className="text-gray-600">
-                      {new Date(proj.created_at * 1000).toLocaleDateString()}
+                    <div className="text-zinc-700 flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      {new Date(proj.created_at * 1000).toLocaleDateString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                      })}
                     </div>
                   </div>
                 ))
