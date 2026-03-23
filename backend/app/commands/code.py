@@ -613,7 +613,8 @@ SYSTEM_PROMPT_PLAN = textwrap.dedent("""\
         "key_features": ["feature1", "feature2"],
         "dependencies": ["package1", "package2"],
         "design_patterns": ["Pattern1", "Pattern2"],
-        "entry_point": "main.py"
+        "entry_point": "main.py",
+        "build_order": ["config.py", "models.py", "utils.py", "services.py", "main.py"]
     }
 
     Planning rules:
@@ -623,7 +624,110 @@ SYSTEM_PROMPT_PLAN = textwrap.dedent("""\
     - Suggest design patterns that fit the use case.
     - Keep it practical — code must actually run headlessly.
     - Use SQLite for databases (no external DB servers).
+    - Specify build_order: list files in dependency order (foundations first, entry point last).
+    - Each component must have a clear responsibility and interface description.
     - Return ONLY the JSON, no other text.\
+""")
+
+SYSTEM_PROMPT_MODULE = textwrap.dedent("""\
+    You are MCP, an elite autonomous AI software engineer.
+    You are building a project MODULE BY MODULE, like a senior developer would.
+
+    You are generating ONE specific module. You have:
+    - The architecture plan for the full project
+    - The modules that have already been built (their full source code)
+    - The specification for THIS module you need to build now
+
+    Rules:
+    - Return ONLY the Python code for this ONE module. No markdown fences, no prose.
+    - The code must be COMPLETE and self-contained for this module.
+    - Import from other project modules using relative imports or direct imports.
+    - The code must be compatible with the already-built modules.
+    - Use proper type hints, docstrings, error handling.
+    - Follow PEP 8.
+    - NEVER use input() or interactive prompts.
+    - If this is the entry point (main.py), include a comprehensive demo in main()
+      that exercises ALL features from ALL modules with hardcoded example data.
+    - The demo must produce clear, formatted console output proving everything works.
+    - Use design patterns appropriate for the module's role.
+    - Include logging with proper log levels.
+    - Add custom exception classes where appropriate.\
+""")
+
+SYSTEM_PROMPT_REVIEW = textwrap.dedent("""\
+    You are MCP, an elite autonomous AI code reviewer.
+    Review the following project and identify improvements.
+
+    Return a JSON object with this EXACT format (no other text):
+    {
+        "quality_score": 7,
+        "issues": [
+            {
+                "file": "filename.py",
+                "severity": "high",
+                "issue": "Description of the problem",
+                "fix": "How to fix it"
+            }
+        ],
+        "improvements": [
+            {
+                "file": "filename.py",
+                "description": "What to improve",
+                "priority": "high"
+            }
+        ],
+        "files_to_rewrite": ["filename.py"]
+    }
+
+    Review criteria:
+    - Code correctness: Does it actually work? Any bugs?
+    - Error handling: Are edge cases covered? Proper try/except?
+    - Type safety: Are type hints complete and correct?
+    - Documentation: Are docstrings clear and complete?
+    - Architecture: Is separation of concerns respected?
+    - Robustness: Will it handle unexpected input gracefully?
+    - Demo quality: Does main() exercise ALL features convincingly?
+    - Import consistency: Are all cross-module imports correct?
+    - Only list files in files_to_rewrite if they have HIGH severity issues.
+    - quality_score is 1-10 (10 = production-ready, 7+ = good prototype).
+    - Return ONLY the JSON, no other text.\
+""")
+
+SYSTEM_PROMPT_IMPROVE = textwrap.dedent("""\
+    You are MCP, an elite autonomous AI software engineer.
+    You are IMPROVING an existing module based on a code review.
+
+    You have:
+    - The review feedback with specific issues to fix
+    - The current code for this module
+    - All other project files for context
+
+    Rules:
+    - Return ONLY the improved Python code. No markdown fences, no prose.
+    - Fix ALL issues identified in the review for this file.
+    - Maintain compatibility with other project modules.
+    - Do NOT change the module's public interface unless the review says to.
+    - Add missing error handling, type hints, docstrings.
+    - Improve the demo in main() if this is the entry point.
+    - Keep existing working functionality intact.
+    - Make the code production-quality.\
+""")
+
+SYSTEM_PROMPT_POLISH = textwrap.dedent("""\
+    You are MCP, an elite autonomous AI software engineer.
+    Generate a polished, professional README.md for this project.
+
+    Return ONLY the README content in markdown (no fences around it).
+
+    Include:
+    - Project title and one-line description
+    - Features list with bullet points
+    - Architecture overview (which files do what)
+    - Quick start / usage instructions
+    - Example output showing what the program produces
+    - Dependencies list
+    - Project structure tree
+    - Keep it concise but professional — like a real GitHub README.\
 """)
 
 
@@ -1128,7 +1232,229 @@ async def _handle_single_file(
     }
 
 
-# ─── Multi-File Project ──────────────────────────────────────────
+# ─── Iterative Build Helpers ─────────────────────────────────────
+
+
+async def _generate_detailed_plan(
+    args: str, api_key: str
+) -> dict | None:
+    """Phase 1: Generate a detailed architecture plan with build order."""
+    plan_messages = [
+        {"role": "system", "content": SYSTEM_PROMPT_PLAN},
+        {"role": "user", "content": f"Plan the architecture for: {args}"},
+    ]
+    raw_plan = await _call_ai(
+        plan_messages, api_key, max_tokens=3000, use_heavy_model=True
+    )
+    try:
+        plan_match = re.search(r"\{[\s\S]*\}", raw_plan)
+        if plan_match:
+            plan_data = json.loads(plan_match.group())
+            # Ensure build_order exists
+            if "build_order" not in plan_data:
+                # Derive from components
+                components = plan_data.get("components", [])
+                plan_data["build_order"] = [
+                    c["file"] for c in components if "file" in c
+                ]
+                # Ensure entry point is last
+                entry = plan_data.get("entry_point", "main.py")
+                if entry in plan_data["build_order"]:
+                    plan_data["build_order"].remove(entry)
+                plan_data["build_order"].append(entry)
+            return plan_data
+    except (json.JSONDecodeError, AttributeError):
+        pass
+    return None
+
+
+async def _build_single_module(
+    module_file: str,
+    module_spec: str,
+    plan_data: dict,
+    built_modules: dict[str, str],
+    args: str,
+    api_key: str,
+) -> str:
+    """Phase 2: Generate a single module with full context of plan and built modules."""
+    # Build context of already-built modules
+    built_context = ""
+    if built_modules:
+        built_context = "\n\nAlready built modules:\n"
+        for path, code in built_modules.items():
+            # Truncate very long modules for context
+            truncated = code[:3000] if len(code) > 3000 else code
+            built_context += f"\n--- {path} ---\n{truncated}\n"
+
+    plan_summary = (
+        f"Project: {args}\n"
+        f"Architecture: {plan_data.get('architecture', 'N/A')}\n"
+        f"Components: {json.dumps(plan_data.get('components', []))}\n"
+        f"Data models: {json.dumps(plan_data.get('data_models', []))}\n"
+        f"Design patterns: {plan_data.get('design_patterns', [])}\n"
+        f"Dependencies: {plan_data.get('dependencies', [])}\n"
+        f"All files: {plan_data.get('build_order', [])}\n"
+    )
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT_MODULE},
+        {"role": "user", "content": (
+            f"{plan_summary}\n"
+            f"NOW BUILD THIS MODULE: {module_file}\n"
+            f"Module specification: {module_spec}\n"
+            f"{built_context}\n"
+            f"Return ONLY the complete Python code for {module_file}."
+        )},
+    ]
+
+    raw_code = await _call_ai(
+        messages, api_key, max_tokens=4000, use_heavy_model=True
+    )
+    return _strip_markdown_fences(raw_code)
+
+
+async def _review_project(
+    project_dir: str, args: str, api_key: str
+) -> dict | None:
+    """Phase 4: AI reviews the entire project and returns improvement suggestions."""
+    project_code = _read_project_files(project_dir)
+    if not project_code:
+        return None
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT_REVIEW},
+        {"role": "user", "content": (
+            f"Project: {args}\n\n"
+            f"Full project source code:\n{project_code}\n\n"
+            f"Review this project and identify improvements."
+        )},
+    ]
+
+    raw_review = await _call_ai(
+        messages, api_key, max_tokens=3000, use_heavy_model=True
+    )
+    try:
+        review_match = re.search(r"\{[\s\S]*\}", raw_review)
+        if review_match:
+            return json.loads(review_match.group())
+    except (json.JSONDecodeError, AttributeError):
+        pass
+    return None
+
+
+async def _improve_module(
+    file_path: str,
+    review_data: dict,
+    project_dir: str,
+    args: str,
+    api_key: str,
+) -> str:
+    """Phase 4b: Improve a specific module based on review feedback."""
+    with open(file_path) as f:
+        current_code = f.read()
+
+    rel_path = os.path.relpath(file_path, project_dir)
+
+    # Gather review issues for this file
+    file_issues = [
+        i for i in review_data.get("issues", [])
+        if i.get("file") == rel_path or i.get("file") == os.path.basename(file_path)
+    ]
+    file_improvements = [
+        i for i in review_data.get("improvements", [])
+        if i.get("file") == rel_path or i.get("file") == os.path.basename(file_path)
+    ]
+
+    if not file_issues and not file_improvements:
+        return current_code  # Nothing to improve
+
+    project_context = _read_project_files(project_dir)
+
+    feedback = "Issues to fix:\n"
+    for issue in file_issues:
+        feedback += f"- [{issue.get('severity', 'medium')}] {issue.get('issue', '')}: {issue.get('fix', '')}\n"
+    feedback += "\nImprovements to apply:\n"
+    for imp in file_improvements:
+        feedback += f"- [{imp.get('priority', 'medium')}] {imp.get('description', '')}\n"
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT_IMPROVE},
+        {"role": "user", "content": (
+            f"Project: {args}\n\n"
+            f"Review feedback for {rel_path}:\n{feedback}\n\n"
+            f"Current code:\n```\n{current_code}\n```\n\n"
+            f"Other project files for context:\n{project_context}\n\n"
+            f"Return the improved version of {rel_path}."
+        )},
+    ]
+
+    raw_improved = await _call_ai(
+        messages, api_key, max_tokens=4000, use_heavy_model=True
+    )
+    return _strip_markdown_fences(raw_improved)
+
+
+async def _generate_readme(
+    project_dir: str, args: str, output_sample: str, api_key: str
+) -> str:
+    """Phase 5: Generate a polished README.md."""
+    project_code = _read_project_files(project_dir)
+    file_list = []
+    for root, _dirs, files in os.walk(project_dir):
+        for fname in sorted(files):
+            if not fname.startswith(".") and "__pycache__" not in root:
+                rel = os.path.relpath(os.path.join(root, fname), project_dir)
+                file_list.append(rel)
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT_POLISH},
+        {"role": "user", "content": (
+            f"Project: {args}\n"
+            f"Files: {file_list}\n\n"
+            f"Source code:\n{project_code[:8000]}\n\n"
+            f"Example output when running main.py:\n{output_sample[:2000]}\n\n"
+            f"Generate a professional README.md."
+        )},
+    ]
+
+    raw_readme = await _call_ai(
+        messages, api_key, max_tokens=2000, use_heavy_model=False
+    )
+    return _strip_markdown_fences(raw_readme)
+
+
+def _cross_file_fix_loop(
+    entry_path: str,
+    interpreter: str,
+    project_dir: str,
+    file_list: list[str],
+    packages: list[str],
+    lang: str,
+    exec_timeout: int,
+    install_log: str,
+) -> tuple[bool, str, str, str]:
+    """Synchronous portion of the cross-file fix loop (deps + detect error file).
+
+    Returns (run_success, output, error, install_log).
+    """
+    run_success, output, error = _run_code(entry_path, interpreter, timeout=exec_timeout)
+
+    if run_success:
+        return run_success, output, error, install_log
+
+    # Try installing missing module
+    if "ModuleNotFoundError" in error:
+        mod_match = re.search(r"No module named '(\w+)'", error)
+        if mod_match:
+            dep_log = _auto_install_deps([mod_match.group(1)], lang, project_dir)
+            if dep_log:
+                install_log += "; " + dep_log if install_log else dep_log
+            run_success, output, error = _run_code(entry_path, interpreter, timeout=exec_timeout)
+
+    return run_success, output, error, install_log
+
+
+# ─── Multi-File Project (Iterative Devin-like Pipeline) ─────────
 
 
 async def _handle_project(
@@ -1137,114 +1463,125 @@ async def _handle_project(
     project_name: str,
     has_vscode: bool,
 ) -> dict:
-    """Generate a multi-file project with optional architecture planning."""
+    """Generate a multi-file project using an iterative Devin-like pipeline.
+
+    5-phase process for complex projects:
+      Phase 1: Deep architecture planning with module specs and build order
+      Phase 2: Module-by-module building (each module built with context of others)
+      Phase 3: Integration testing and cross-file error fixing
+      Phase 4: Self-review — AI reviews its own code and applies improvements
+      Phase 5: Polish — generate README, improve demo output
+    """
     complex_mode = _is_complex(args)
     max_fix = MAX_FIX_ATTEMPTS if complex_mode else MAX_FIX_ATTEMPTS_SIMPLE
     exec_timeout = EXEC_TIMEOUT if complex_mode else EXEC_TIMEOUT_SIMPLE
 
-    # Step 0: Architecture planning for complex projects
+    # ────────────────────────────────────────────────────────────
+    # PHASE 1: Architecture Planning
+    # ────────────────────────────────────────────────────────────
     plan_data = None
-    plan_context = ""
     if complex_mode:
-        plan_messages = [
-            {"role": "system", "content": SYSTEM_PROMPT_PLAN},
-            {"role": "user", "content": f"Plan the architecture for: {args}"},
-        ]
-        raw_plan = await _call_ai(
-            plan_messages, api_key, max_tokens=2000, use_heavy_model=True
+        plan_data = await _generate_detailed_plan(args, api_key)
+
+    # If planning failed or not complex, fall back to one-shot generation
+    if not plan_data or not plan_data.get("build_order"):
+        return await _handle_project_oneshot(args, api_key, project_name, has_vscode, plan_data)
+
+    project_dir = os.path.join(OUTPUT_BASE, project_name)
+    os.makedirs(project_dir, exist_ok=True)
+
+    # Build component spec lookup
+    component_specs: dict[str, str] = {}
+    for comp in plan_data.get("components", []):
+        fpath = comp.get("file", "")
+        component_specs[fpath] = (
+            f"{comp.get('name', '')}: {comp.get('responsibility', '')}"
         )
-        try:
-            plan_match = re.search(r"\{[\s\S]*\}", raw_plan)
-            if plan_match:
-                plan_data = json.loads(plan_match.group())
-                plan_context = (
-                    f"\n\nArchitecture plan to follow:\n"
-                    f"Components: {json.dumps(plan_data.get('components', []))}\n"
-                    f"Data models: {json.dumps(plan_data.get('data_models', []))}\n"
-                    f"Design patterns: {plan_data.get('design_patterns', [])}\n"
-                    f"Dependencies: {plan_data.get('dependencies', [])}\n"
-                )
-        except (json.JSONDecodeError, AttributeError):
-            pass
 
-    # Step 1: Generate project files
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT_PROJECT},
-        {"role": "user", "content": f"Generate a project for: {args}{plan_context}"},
-    ]
+    build_order = plan_data["build_order"]
+    entry_point = plan_data.get("entry_point", "main.py")
 
-    token_limit = 12000 if complex_mode else 4000
-    raw_response = await _call_ai(
-        messages, api_key, max_tokens=token_limit, use_heavy_model=complex_mode
-    )
-    project_data = _parse_multi_file(raw_response)
+    # Ensure config files (requirements.txt, __init__.py) are generated
+    config_files = ["requirements.txt", "config.py", "__init__.py"]
+    for cf in config_files:
+        if cf not in build_order and any(
+            cf == comp.get("file") for comp in plan_data.get("components", [])
+        ):
+            build_order.insert(0, cf)
 
-    if not project_data:
-        # Fallback: treat as single file
-        code = _strip_markdown_fences(raw_response)
-        ext, interpreter, lang = _detect_language(code, args)
-        filepath = _save_code(code, project_name, ext)
-        packages = _extract_imports(code, lang)
-        install_log = _auto_install_deps(packages, lang, os.path.dirname(filepath))
-        success, stdout, stderr = _run_code(filepath, interpreter, timeout=exec_timeout)
+    # ────────────────────────────────────────────────────────────
+    # PHASE 2: Module-by-Module Building
+    # ────────────────────────────────────────────────────────────
+    built_modules: dict[str, str] = {}
+    file_list: list[str] = []
 
-        _add_to_memory(args, filepath, lang, success)
+    for module_file in build_order:
+        spec = component_specs.get(module_file, f"Module: {module_file}")
 
-        return {
-            "message": (
-                f"Project scaffolding for: {args}. "
-                f"Generated as single file. Saved to {filepath}"
-            ),
-            "data": {
-                "request": args,
-                "status": "success" if success else "partial",
-                "language": lang,
-                "saved_to": filepath,
-                "output": stdout[:500] if stdout else "",
-                "error": stderr[:500] if stderr else "",
-                "deps_installed": install_log,
-                "generated_code": code,
-            },
-        }
+        # Generate this module with context of all previously built modules
+        module_code = await _build_single_module(
+            module_file, spec, plan_data, built_modules, args, api_key
+        )
 
-    # Save multi-file project
-    project_dir, entry_path = _save_multi_file_project(project_data, project_name)
-    file_list = [f["path"] for f in project_data["files"]]
+        # Save the module
+        safe_path = os.path.normpath(module_file).lstrip("/").lstrip("../")
+        filepath = os.path.join(project_dir, safe_path)
+        if not filepath.startswith(project_dir):
+            continue
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, "w") as f:
+            f.write(module_code)
 
-    # Try to run the entry point
+        built_modules[module_file] = module_code
+        file_list.append(module_file)
+
+    # Generate requirements.txt if not already built
+    if "requirements.txt" not in file_list:
+        deps = plan_data.get("dependencies", [])
+        if deps:
+            req_path = os.path.join(project_dir, "requirements.txt")
+            with open(req_path, "w") as f:
+                f.write("\n".join(deps))
+            file_list.append("requirements.txt")
+
+    # ────────────────────────────────────────────────────────────
+    # PHASE 3: Integration Testing & Cross-File Fixing
+    # ────────────────────────────────────────────────────────────
+    entry_path = os.path.join(project_dir, entry_point)
+    if not os.path.exists(entry_path):
+        # Try to find any main/app file
+        for candidate in ["main.py", "app.py", "index.py"]:
+            cp = os.path.join(project_dir, candidate)
+            if os.path.exists(cp):
+                entry_path = cp
+                break
+
     output = ""
     error = ""
     run_success = False
     lang = "python"
     install_log = ""
 
-    if entry_path:
+    if os.path.exists(entry_path):
         with open(entry_path) as f:
             entry_code = f.read()
         ext, interpreter, lang = _detect_language(entry_code, args)
 
-        # Auto-install deps from ALL project files (not just entry point)
+        # Auto-install deps from ALL project files
         all_code = _read_project_files(project_dir)
         packages = _extract_imports(all_code, lang)
         install_log = _auto_install_deps(packages, lang, project_dir)
 
-        run_success, output, error = _run_code(entry_path, interpreter, timeout=exec_timeout)
+        # Initial run
+        run_success, output, error, install_log = _cross_file_fix_loop(
+            entry_path, interpreter, project_dir, file_list,
+            packages, lang, exec_timeout, install_log,
+        )
 
         # Cross-file-aware auto-fix loop
         fix_attempt = 0
         while not run_success and fix_attempt < max_fix:
             fix_attempt += 1
-
-            # Try installing missing module first
-            if "ModuleNotFoundError" in error:
-                mod_match = re.search(r"No module named '(\w+)'", error)
-                if mod_match:
-                    dep_log = _auto_install_deps([mod_match.group(1)], lang, project_dir)
-                    if dep_log:
-                        install_log += "; " + dep_log if install_log else dep_log
-                    run_success, output, error = _run_code(entry_path, interpreter, timeout=exec_timeout)
-                    if run_success:
-                        break
 
             # Read ALL project files for full context when fixing
             project_context = _read_project_files(project_dir)
@@ -1289,11 +1626,286 @@ async def _handle_project(
                     install_log += "; " + dep_log if install_log else dep_log
                 packages.extend(new_deps)
 
+            run_success, output, error = _run_code(
+                entry_path, interpreter, timeout=exec_timeout
+            )
+
+    # ────────────────────────────────────────────────────────────
+    # PHASE 4: Self-Review & Improvement
+    # ────────────────────────────────────────────────────────────
+    review_data = None
+    quality_score = 0
+    if complex_mode:
+        review_data = await _review_project(project_dir, args, api_key)
+
+        if review_data:
+            quality_score = review_data.get("quality_score", 0)
+            files_to_rewrite = review_data.get("files_to_rewrite", [])
+
+            # Improve modules that need it (limit to 5 to avoid excessive API calls)
+            improved_count = 0
+            for rewrite_file in files_to_rewrite[:5]:
+                # Find the full path
+                rewrite_path = os.path.join(project_dir, rewrite_file)
+                if not os.path.exists(rewrite_path):
+                    # Try without subdirectory
+                    for root, _dirs, files in os.walk(project_dir):
+                        if rewrite_file in files:
+                            rewrite_path = os.path.join(root, rewrite_file)
+                            break
+
+                if os.path.exists(rewrite_path):
+                    improved_code = await _improve_module(
+                        rewrite_path, review_data, project_dir, args, api_key
+                    )
+                    with open(rewrite_path, "w") as f:
+                        f.write(improved_code)
+                    improved_count += 1
+
+            # Re-run after improvements
+            if improved_count > 0 and os.path.exists(entry_path):
+                run_success, output, error = _run_code(
+                    entry_path, interpreter, timeout=exec_timeout
+                )
+
+                # One more fix attempt if improvements broke something
+                if not run_success:
+                    project_context = _read_project_files(project_dir)
+                    error_file = entry_path
+                    error_match = re.search(r'File "([^"]+)", line \d+', error)
+                    if error_match:
+                        matched_path = error_match.group(1)
+                        if matched_path.startswith(project_dir):
+                            error_file = matched_path
+
+                    with open(error_file) as f:
+                        current_code = f.read()
+
+                    fix_messages = [
+                        {"role": "system", "content": SYSTEM_PROMPT_FIX},
+                        {"role": "user", "content": (
+                            f"Project: {args}\n"
+                            f"ALL project files:\n{project_context}\n\n"
+                            f"File with error ({os.path.relpath(error_file, project_dir)}):\n"
+                            f"```\n{current_code}\n```\n\n"
+                            f"Error:\n```\n{error}\n```\n\n"
+                            f"Fix the file. Return the complete fixed file."
+                        )},
+                    ]
+                    raw_fix = await _call_ai(
+                        fix_messages, api_key, max_tokens=4000, use_heavy_model=True
+                    )
+                    fixed_code = _strip_markdown_fences(raw_fix)
+                    with open(error_file, "w") as f:
+                        f.write(fixed_code)
+                    run_success, output, error = _run_code(
+                        entry_path, interpreter, timeout=exec_timeout
+                    )
+
+    # ────────────────────────────────────────────────────────────
+    # PHASE 5: Polish (README + final touches)
+    # ────────────────────────────────────────────────────────────
+    if complex_mode:
+        readme_content = await _generate_readme(
+            project_dir, args, output or "", api_key
+        )
+        readme_path = os.path.join(project_dir, "README.md")
+        with open(readme_path, "w") as f:
+            f.write(readme_content)
+        if "README.md" not in file_list:
+            file_list.append("README.md")
+
+    # ────────────────────────────────────────────────────────────
+    # Final: Record + Report
+    # ────────────────────────────────────────────────────────────
+    _add_to_memory(args, project_dir, lang, run_success)
+
+    if has_vscode:
+        try:
+            subprocess.Popen(
+                ["code", project_dir],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+
+    provider = _get_ai_provider()
+    if provider == "anthropic":
+        model_used = "claude-sonnet-4-20250514" if complex_mode else "claude-haiku-4-5-20251001"
+    else:
+        model_used = "gpt-4o" if complex_mode else "gpt-4o-mini"
+
+    # Build pipeline summary
+    pipeline_phases = ["Architecture Planning", "Module-by-Module Build"]
+    if run_success or error:
+        pipeline_phases.append("Integration Testing")
+    if review_data:
+        pipeline_phases.append(f"Self-Review (score: {quality_score}/10)")
+    if complex_mode:
+        pipeline_phases.append("Polish & README")
+
+    return {
+        "message": (
+            f"Project assimilated: {args}. "
+            f"{len(file_list)} files generated via iterative pipeline. "
+            f"Pipeline: {' → '.join(pipeline_phases)}. "
+            f"Model: {model_used}. "
+            f"{'Runs successfully.' if run_success else 'Has issues — review output.'}"
+        ),
+        "data": {
+            "request": args,
+            "status": "success" if run_success else "partial",
+            "project_dir": project_dir,
+            "files": file_list,
+            "file_count": len(file_list),
+            "entry_point": entry_point,
+            "model": model_used,
+            "complex_mode": complex_mode,
+            "pipeline": " → ".join(pipeline_phases),
+            "quality_score": quality_score if review_data else "N/A",
+            "architecture_plan": plan_data.get("architecture", "") if plan_data else "",
+            "output": output[:2000] if output else "",
+            "error": error[:1000] if error else "",
+            "deps_installed": install_log,
+        },
+    }
+
+
+async def _handle_project_oneshot(
+    args: str,
+    api_key: str,
+    project_name: str,
+    has_vscode: bool,
+    plan_data: dict | None,
+) -> dict:
+    """Fallback: one-shot project generation (non-complex or planning failed)."""
+    complex_mode = _is_complex(args)
+    max_fix = MAX_FIX_ATTEMPTS if complex_mode else MAX_FIX_ATTEMPTS_SIMPLE
+    exec_timeout = EXEC_TIMEOUT if complex_mode else EXEC_TIMEOUT_SIMPLE
+
+    plan_context = ""
+    if plan_data:
+        plan_context = (
+            f"\n\nArchitecture plan to follow:\n"
+            f"Components: {json.dumps(plan_data.get('components', []))}\n"
+            f"Data models: {json.dumps(plan_data.get('data_models', []))}\n"
+            f"Design patterns: {plan_data.get('design_patterns', [])}\n"
+            f"Dependencies: {plan_data.get('dependencies', [])}\n"
+        )
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT_PROJECT},
+        {"role": "user", "content": f"Generate a project for: {args}{plan_context}"},
+    ]
+
+    token_limit = 12000 if complex_mode else 4000
+    raw_response = await _call_ai(
+        messages, api_key, max_tokens=token_limit, use_heavy_model=complex_mode
+    )
+    project_data = _parse_multi_file(raw_response)
+
+    if not project_data:
+        code = _strip_markdown_fences(raw_response)
+        ext, interpreter, lang = _detect_language(code, args)
+        filepath = _save_code(code, project_name, ext)
+        packages = _extract_imports(code, lang)
+        install_log = _auto_install_deps(packages, lang, os.path.dirname(filepath))
+        success, stdout, stderr = _run_code(filepath, interpreter, timeout=exec_timeout)
+        _add_to_memory(args, filepath, lang, success)
+
+        return {
+            "message": (
+                f"Project scaffolding for: {args}. "
+                f"Generated as single file. Saved to {filepath}"
+            ),
+            "data": {
+                "request": args,
+                "status": "success" if success else "partial",
+                "language": lang,
+                "saved_to": filepath,
+                "output": stdout[:500] if stdout else "",
+                "error": stderr[:500] if stderr else "",
+                "deps_installed": install_log,
+                "generated_code": code,
+            },
+        }
+
+    project_dir, entry_path = _save_multi_file_project(project_data, project_name)
+    file_list = [f["path"] for f in project_data["files"]]
+
+    output = ""
+    error = ""
+    run_success = False
+    lang = "python"
+    install_log = ""
+
+    if entry_path:
+        with open(entry_path) as f:
+            entry_code = f.read()
+        ext, interpreter, lang = _detect_language(entry_code, args)
+
+        all_code = _read_project_files(project_dir)
+        packages = _extract_imports(all_code, lang)
+        install_log = _auto_install_deps(packages, lang, project_dir)
+        run_success, output, error = _run_code(entry_path, interpreter, timeout=exec_timeout)
+
+        fix_attempt = 0
+        while not run_success and fix_attempt < max_fix:
+            fix_attempt += 1
+
+            if "ModuleNotFoundError" in error:
+                mod_match = re.search(r"No module named '(\w+)'", error)
+                if mod_match:
+                    dep_log = _auto_install_deps([mod_match.group(1)], lang, project_dir)
+                    if dep_log:
+                        install_log += "; " + dep_log if install_log else dep_log
+                    run_success, output, error = _run_code(entry_path, interpreter, timeout=exec_timeout)
+                    if run_success:
+                        break
+
+            project_context = _read_project_files(project_dir)
+            error_file = entry_path
+            error_match = re.search(r'File "([^"]+)", line \d+', error)
+            if error_match:
+                matched_path = error_match.group(1)
+                if matched_path.startswith(project_dir):
+                    error_file = matched_path
+
+            with open(error_file) as f:
+                current_code = f.read()
+
+            fix_messages = [
+                {"role": "system", "content": SYSTEM_PROMPT_FIX},
+                {"role": "user", "content": (
+                    f"Project: {args}\n"
+                    f"Files: {file_list}\n\n"
+                    f"ALL project files:\n{project_context}\n\n"
+                    f"File with error ({os.path.relpath(error_file, project_dir)}):\n"
+                    f"```\n{current_code}\n```\n\n"
+                    f"Error:\n```\n{error}\n```\n\n"
+                    f"Fix ONLY the file that has the error. Return the complete fixed file."
+                )},
+            ]
+            raw_fix = await _call_ai(
+                fix_messages, api_key, max_tokens=4000, use_heavy_model=complex_mode
+            )
+            fixed_code = _strip_markdown_fences(raw_fix)
+            with open(error_file, "w") as f:
+                f.write(fixed_code)
+
+            new_packages = _extract_imports(fixed_code, lang)
+            new_deps = [p for p in new_packages if p not in packages]
+            if new_deps:
+                dep_log = _auto_install_deps(new_deps, lang, project_dir)
+                if dep_log:
+                    install_log += "; " + dep_log if install_log else dep_log
+                packages.extend(new_deps)
+
             run_success, output, error = _run_code(entry_path, interpreter, timeout=exec_timeout)
 
     _add_to_memory(args, project_dir, lang, run_success)
 
-    # Open project in VSCode
     if has_vscode:
         try:
             subprocess.Popen(["code", project_dir], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -1305,10 +1917,11 @@ async def _handle_project(
         model_used = "claude-sonnet-4-20250514" if complex_mode else "claude-haiku-4-5-20251001"
     else:
         model_used = "gpt-4o" if complex_mode else "gpt-4o-mini"
+
     return {
         "message": (
             f"Project assimilated: {args}. "
-            f"{len(file_list)} files generated in {project_dir}. "
+            f"{len(file_list)} files generated. "
             f"Model: {model_used}."
         ),
         "data": {
