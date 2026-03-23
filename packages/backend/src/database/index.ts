@@ -11,6 +11,7 @@ import { SystemMetrics } from './entities/SystemMetrics';
 import { SecurityEvent } from './entities/SecurityEvent';
 import { OpenClawSkillEntity } from './entities/OpenClawSkill';
 import { OpenClawConversation } from './entities/OpenClawConversation';
+import { Organization } from './entities/Organization';
 import { InitialMigration1709123456789 } from './migrations/1709123456789-InitialMigration';
 import { AddAISettings1709123456790 } from './migrations/1709123456790-AddAISettings';
 import { AddCrudData1709123456791 } from './migrations/1709123456791-AddCrudData';
@@ -23,6 +24,7 @@ import { AddSampleData1709123456798 } from './migrations/1709123456798-AddSample
 import { AddMetadataToSystemMetrics1740686972345 } from './migrations/1740686972345-AddMetadataToSystemMetrics';
 import { AddTypeAndValueToSystemMetrics1740686972346 } from './migrations/1740686972346-AddTypeAndValueToSystemMetrics';
 import { AddOpenClawTables1742751600000 } from './migrations/1742751600000-AddOpenClawTables';
+import { AddOrganization1742751600001 } from './migrations/1742751600001-AddOrganization';
 
 // Log database configuration before initializing
 logger.info('Database configuration:', {
@@ -41,7 +43,7 @@ export const AppDataSource = new DataSource({
   database: process.env.DB_DATABASE || 'admin_ai',
   synchronize: false, // Set to false since we're using migrations
   logging: process.env.NODE_ENV !== 'production',
-  entities: [User, ApiKey, Widget, CrudPage, CrudData, AISettings, ErrorLog, SystemMetrics, SecurityEvent, OpenClawSkillEntity, OpenClawConversation],
+  entities: [User, ApiKey, Widget, CrudPage, CrudData, AISettings, ErrorLog, SystemMetrics, SecurityEvent, OpenClawSkillEntity, OpenClawConversation, Organization],
   migrations: [
     InitialMigration1709123456789,
     AddAISettings1709123456790,
@@ -54,7 +56,8 @@ export const AppDataSource = new DataSource({
     AddSampleData1709123456798,
     AddMetadataToSystemMetrics1740686972345,
     AddTypeAndValueToSystemMetrics1740686972346,
-    AddOpenClawTables1742751600000
+    AddOpenClawTables1742751600000,
+    AddOrganization1742751600001
   ],
   subscribers: [],
 });

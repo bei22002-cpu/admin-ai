@@ -5,11 +5,14 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   OneToMany,
+  ManyToOne,
+  JoinColumn,
 } from 'typeorm';
 import { ApiKey } from './ApiKey';
 import { Widget } from './Widget';
 import { CrudPage } from './CrudPage';
 import { AISettings } from './AISettings';
+import { Organization } from './Organization';
 
 @Entity('user')
 export class User {
@@ -50,4 +53,11 @@ export class User {
 
   @OneToMany(() => AISettings, (aiSettings) => aiSettings.user)
   aiSettings!: AISettings[];
-} 
+
+  @Column({ nullable: true })
+  organizationId!: string;
+
+  @ManyToOne(() => Organization, { nullable: true })
+  @JoinColumn({ name: 'organizationId' })
+  organization!: Organization;
+}     

@@ -21,6 +21,7 @@ import { CrudPage } from './pages/CrudPage';
 import { ApiKeys } from './pages/ApiKeys';
 import { Settings } from './pages/Settings';
 import { OpenClawDashboard } from './pages/OpenClawDashboard';
+import { LandingPage } from './pages/LandingPage';
 import { getThemeOptions } from './theme';
 import { ThemeContextType } from './types/theme';
 import { ProtectedRoute } from './components/ProtectedRoute';
@@ -47,6 +48,7 @@ export const App: React.FC = () => {
                       <CrudProvider>
                         <CrudPagesProvider>
                           <Routes>
+                            <Route path="/landing" element={<LandingPage />} />
                             <Route path="/login" element={<Login />} />
                             <Route element={<RequireAuth><Layout /></RequireAuth>}>
                               <Route path="/" element={<Navigate to="/dashboard" />} />
@@ -73,4 +75,4 @@ export const App: React.FC = () => {
       </NotistackProvider>
     </ErrorBoundary>
   );
-};  
+};    
