@@ -25,7 +25,7 @@ def verify_password(password: str, hashed: str) -> bool:
 def create_token(user_id: int, username: str) -> str:
     """Create a JWT token."""
     payload = {
-        "sub": user_id,
+        "sub": str(user_id),
         "username": username,
         "iat": time.time(),
         "exp": time.time() + TOKEN_EXPIRE_SECONDS,
@@ -37,8 +37,8 @@ def decode_token(token: str) -> dict[str, Any] | None:
     """Decode and validate a JWT token. Returns payload or None."""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        if payload.get("exp", 0) < time.time():
-            return None
+        # Convert sub back to int for database lookups
+        payload["sub"] = int(payload["sub"])
         return payload
-    except (jwt.InvalidTokenError, jwt.ExpiredSignatureError):
+    except (jwt.InvalidTokenError, jwt.ExpiredSignatureError, KeyError, ValueError):
         return None
