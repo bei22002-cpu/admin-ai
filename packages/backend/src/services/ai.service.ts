@@ -570,7 +570,7 @@ Generate a response that:
   public async analyzeMetrics(metrics: SystemMetrics): Promise<any> {
     try {
       // Get the active provider
-      const activeProvider = await this.getActiveProvider(this.currentUserId);
+      const activeProvider = await this.getActiveProvider(this.currentUserId ?? undefined);
       if (!activeProvider || !this.isReady) {
         // If no active provider, generate synthetic analysis
         return this.generateSyntheticMetricsAnalysis(metrics);
@@ -652,7 +652,8 @@ Generate a response that:
   private generateSyntheticMetricsAnalysis(metrics: SystemMetrics): any {
     const cpuStatus = metrics.cpuUsage > 80 ? 'high' : metrics.cpuUsage > 50 ? 'moderate' : 'normal';
     const memoryStatus = metrics.memoryUsage > 80 ? 'high' : metrics.memoryUsage > 50 ? 'moderate' : 'normal';
-    const responseTimeStatus = metrics.averageResponseTime > 500 ? 'slow' : metrics.averageResponseTime > 200 ? 'moderate' : 'fast';
+    const avgResponseTime = metrics.averageResponseTime ?? 0;
+    const responseTimeStatus = avgResponseTime > 500 ? 'slow' : avgResponseTime > 200 ? 'moderate' : 'fast';
     
     const issues = [];
     const recommendations = [];
@@ -680,7 +681,7 @@ Generate a response that:
     // Calculate a synthetic health score
     const cpuScore = 100 - metrics.cpuUsage;
     const memoryScore = 100 - metrics.memoryUsage;
-    const responseTimeScore = Math.max(0, 100 - (metrics.averageResponseTime / 10));
+    const responseTimeScore = Math.max(0, 100 - (avgResponseTime / 10));
     const errorScore = Math.max(0, 100 - (metrics.errorCount * 5));
     
     const overallScore = Math.round((cpuScore + memoryScore + responseTimeScore + errorScore) / 4);
@@ -699,7 +700,7 @@ Generate a response that:
   public async analyzeError(error: { error: any; context: any }): Promise<any> {
     try {
       // Get the active provider
-      const activeProvider = await this.getActiveProvider(this.currentUserId);
+      const activeProvider = await this.getActiveProvider(this.currentUserId ?? undefined);
       if (!activeProvider || !this.isReady) {
         // If no active provider, generate synthetic analysis
         return this.generateSyntheticErrorAnalysis(error);
@@ -754,8 +755,8 @@ Generate a response that:
         provider: activeProvider.provider,
         model: activeProvider.selectedModel,
       };
-    } catch (error) {
-      logger.error('Error analyzing error with AI:', error);
+    } catch (err) {
+      logger.error('Error analyzing error with AI:', err);
       return this.generateSyntheticErrorAnalysis(error);
     }
   }

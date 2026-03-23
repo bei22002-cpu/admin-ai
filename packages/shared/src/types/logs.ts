@@ -43,17 +43,11 @@ export type AuditLog = z.infer<typeof AuditLogSchema>;
 
 export interface LogEntry {
   id: string;
-  timestamp: string;
+  timestamp: string | number;
   level: 'info' | 'warn' | 'error' | 'debug';
   message: string;
   metadata?: Record<string, any>;
-}
-
-export interface ErrorLog extends LogEntry {
-  level: 'error';
   stack?: string;
-  code?: string;
-  details?: Record<string, any>;
 }
 
 export interface SecurityEvent {
@@ -64,4 +58,4 @@ export interface SecurityEvent {
   success: boolean;
   severity: 'low' | 'medium' | 'high' | 'critical';
   details?: Record<string, any>;
-} 
+}  

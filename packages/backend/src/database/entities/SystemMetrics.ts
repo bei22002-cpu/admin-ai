@@ -21,7 +21,7 @@ export class SystemMetrics {
   averageResponseTime!: number;
 
   @Column('jsonb', { default: [] })
-  topPaths!: { path: string; count: number }[];
+  topPaths!: { path: string; count: number; averageResponseTime: number }[];
 
   @Column('jsonb', { default: {} })
   locationStats!: Record<string, number>;
