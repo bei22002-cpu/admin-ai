@@ -3,6 +3,7 @@ import { EventEmitter } from 'events';
 import { WebSocketService } from './websocket.service';
 import { AIMessage } from '@admin-ai/shared/src/types/ai';
 import { randomUUID } from 'crypto';
+import WebSocket from 'ws';
 
 /**
  * Represents an OpenClaw skill that can be executed by the assistant
@@ -61,6 +62,11 @@ export class OpenClawService extends EventEmitter {
   private healthCheckInterval: NodeJS.Timeout | null = null;
   private lastHeartbeat: string | null = null;
   private channels: string[] = [];
+  private gatewayWs: WebSocket | null = null;
+  private reconnectAttempts: number = 0;
+  private maxReconnectAttempts: number = 10;
+  private reconnectDelay: number = 3000;
+  private pendingMessages: Map<string, { resolve: (value: string) => void; reject: (reason: Error) => void; timeout: NodeJS.Timeout }> = new Map();
 
   private constructor() {
     super();
@@ -97,9 +103,13 @@ export class OpenClawService extends EventEmitter {
         }
       }
 
-      // Test connection to OpenClaw gateway if enabled
+      // Connect to OpenClaw gateway if enabled
       if (this.enabled && this.gatewayUrl) {
-        await this.testConnection();
+        if (this.gatewayUrl.startsWith('ws://') || this.gatewayUrl.startsWith('wss://')) {
+          await this.connectWebSocket();
+        } else {
+          await this.testConnection();
+        }
         this.startHealthCheck();
       }
 
@@ -551,8 +561,13 @@ export class OpenClawService extends EventEmitter {
    */
   public async sendMessage(content: string, userId?: string): Promise<string> {
     try {
-      // If gateway is connected, route through it
-      if (this.connected && this.gatewayUrl) {
+      // If gateway is connected via WebSocket, use that
+      if (this.connected && this.gatewayWs && this.gatewayWs.readyState === WebSocket.OPEN) {
+        return await this.sendViaWebSocket(content, userId);
+      }
+
+      // If gateway is connected via HTTP, route through REST API
+      if (this.connected && this.gatewayUrl && !this.gatewayUrl.startsWith('ws')) {
         const response = await fetch(`${this.gatewayUrl}/api/chat`, {
           method: 'POST',
           headers: this.getHeaders(),
@@ -911,6 +926,200 @@ export class OpenClawService extends EventEmitter {
   }
 
   /**
+   * Connect to the OpenClaw gateway via WebSocket for real-time bidirectional communication
+   */
+  private async connectWebSocket(): Promise<void> {
+    return new Promise((resolve) => {
+      try {
+        if (this.gatewayWs) {
+          this.gatewayWs.removeAllListeners();
+          this.gatewayWs.close();
+        }
+
+        const wsUrl = new URL(this.gatewayUrl);
+        if (this.apiKey) {
+          wsUrl.searchParams.set('token', this.apiKey);
+        }
+
+        logger.info(`Connecting to OpenClaw gateway via WebSocket: ${this.gatewayUrl}`);
+        this.gatewayWs = new WebSocket(wsUrl.toString());
+
+        this.gatewayWs.on('open', () => {
+          this.connected = true;
+          this.reconnectAttempts = 0;
+          this.lastHeartbeat = new Date().toISOString();
+          logger.info('Connected to OpenClaw gateway via WebSocket');
+
+          // Send authentication handshake
+          this.gatewayWs?.send(JSON.stringify({
+            type: 'auth',
+            apiKey: this.apiKey,
+            skills: Array.from(this.skills.values()).filter(s => s.enabled).map(s => ({
+              id: s.id,
+              name: s.name,
+              category: s.category,
+              triggers: s.triggers,
+            })),
+          }));
+
+          // Broadcast status update
+          if (this.wsService) {
+            this.wsService.broadcast('openclaw:status' as any, this.getStatus());
+          }
+          this.emit('connected');
+          resolve();
+        });
+
+        this.gatewayWs.on('message', (data: WebSocket.Data) => {
+          try {
+            const message = JSON.parse(data.toString());
+            this.handleGatewayMessage(message);
+          } catch (error) {
+            logger.error('Failed to parse gateway message:', error);
+          }
+        });
+
+        this.gatewayWs.on('close', (code: number, reason: Buffer) => {
+          this.connected = false;
+          logger.warn(`OpenClaw gateway WebSocket closed: ${code} ${reason.toString()}`);
+
+          if (this.wsService) {
+            this.wsService.broadcast('openclaw:status' as any, this.getStatus());
+          }
+          this.emit('disconnected');
+
+          // Auto-reconnect if enabled
+          if (this.enabled && this.reconnectAttempts < this.maxReconnectAttempts) {
+            this.reconnectAttempts++;
+            const delay = this.reconnectDelay * Math.min(this.reconnectAttempts, 5);
+            logger.info(`Reconnecting to OpenClaw gateway in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+            setTimeout(() => this.connectWebSocket(), delay);
+          }
+        });
+
+        this.gatewayWs.on('error', (error: Error) => {
+          logger.error('OpenClaw gateway WebSocket error:', error);
+          this.connected = false;
+          resolve(); // Resolve even on error so initialization doesn't hang
+        });
+
+        this.gatewayWs.on('ping', () => {
+          this.lastHeartbeat = new Date().toISOString();
+          this.gatewayWs?.pong();
+        });
+
+      } catch (error) {
+        logger.error('Failed to connect to OpenClaw gateway WebSocket:', error);
+        this.connected = false;
+        resolve();
+      }
+    });
+  }
+
+  /**
+   * Handle incoming messages from the OpenClaw gateway
+   */
+  private handleGatewayMessage(message: Record<string, unknown>): void {
+    const type = message.type as string;
+
+    switch (type) {
+      case 'auth_success':
+        logger.info('OpenClaw gateway authentication successful');
+        break;
+
+      case 'auth_error':
+        logger.error('OpenClaw gateway authentication failed:', message.error);
+        this.connected = false;
+        break;
+
+      case 'chat_response': {
+        const requestId = message.requestId as string;
+        const pending = this.pendingMessages.get(requestId);
+        if (pending) {
+          clearTimeout(pending.timeout);
+          this.pendingMessages.delete(requestId);
+          pending.resolve(message.content as string || 'No response');
+        }
+        break;
+      }
+
+      case 'skill_result': {
+        // Gateway executed a skill and returned the result
+        const skillId = message.skillId as string;
+        const result = message.result as Record<string, unknown>;
+        logger.info(`Skill result received for ${skillId}:`, result);
+        this.emit('skillResult', { skillId, result });
+        break;
+      }
+
+      case 'notification': {
+        // Gateway is pushing a notification to the user
+        if (this.wsService) {
+          const notification: AIMessage = {
+            id: randomUUID(),
+            content: message.content as string || 'Notification from OpenClaw',
+            role: 'assistant',
+            timestamp: new Date().toISOString(),
+            metadata: {
+              type: 'notification',
+              status: 'info',
+              category: 'openclaw',
+              source: {
+                page: 'OpenClaw',
+                controller: 'Gateway',
+                action: 'notification'
+              },
+              timestamp: new Date().toISOString(),
+              read: false
+            }
+          };
+          this.wsService.broadcast('ai:message', notification);
+        }
+        break;
+      }
+
+      case 'heartbeat':
+        this.lastHeartbeat = new Date().toISOString();
+        break;
+
+      case 'error':
+        logger.error('OpenClaw gateway error:', message.error);
+        break;
+
+      default:
+        logger.debug(`Unknown gateway message type: ${type}`, message);
+    }
+  }
+
+  /**
+   * Send a message through the WebSocket gateway
+   */
+  private sendViaWebSocket(content: string, userId?: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      if (!this.gatewayWs || this.gatewayWs.readyState !== WebSocket.OPEN) {
+        reject(new Error('WebSocket not connected'));
+        return;
+      }
+
+      const requestId = randomUUID();
+      const timeout = setTimeout(() => {
+        this.pendingMessages.delete(requestId);
+        reject(new Error('Gateway response timeout'));
+      }, 30000);
+
+      this.pendingMessages.set(requestId, { resolve, reject, timeout });
+
+      this.gatewayWs.send(JSON.stringify({
+        type: 'chat',
+        requestId,
+        content,
+        userId,
+        skills: Array.from(this.skills.values()).filter(s => s.enabled).map(s => s.name),
+      }));
+    });
+  }
+
+  /**
    * Shutdown the OpenClaw service
    */
   public async shutdown(): Promise<void> {
@@ -918,6 +1127,21 @@ export class OpenClawService extends EventEmitter {
       clearInterval(this.healthCheckInterval);
       this.healthCheckInterval = null;
     }
+
+    // Close WebSocket connection
+    if (this.gatewayWs) {
+      this.gatewayWs.removeAllListeners();
+      this.gatewayWs.close(1000, 'Service shutdown');
+      this.gatewayWs = null;
+    }
+
+    // Reject pending messages
+    for (const [id, pending] of this.pendingMessages) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error('Service shutting down'));
+      this.pendingMessages.delete(id);
+    }
+
     this.connected = false;
     this.enabled = false;
     logger.info('OpenClaw service shut down');

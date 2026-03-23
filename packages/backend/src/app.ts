@@ -10,6 +10,7 @@ import { createSettingsRoutes } from './routes/settings.routes';
 import { createApiKeysRoutes } from './routes/apiKeys.routes';
 import { createCrudRoutes } from './routes/crud.routes';
 import { createOpenClawRoutes } from './routes/openclaw.routes';
+import { createBillingRoutes } from './routes/billing.routes';
 import { createHealthRoutes } from './routes/health.routes';
 import configRoutes from './routes/config.routes';
 import { errorHandler } from './middleware/errorHandler';
@@ -87,6 +88,7 @@ export async function createApp(wsService: WebSocketService) {
 
   // Public routes
   app.use('/api/auth', createAuthRoutes(wsService));
+  app.use('/api', createBillingRoutes());
 
   // Protected routes
   app.use('/api/', authMiddleware.requireAuth);  // Apply auth middleware only to API routes
@@ -96,6 +98,8 @@ export async function createApp(wsService: WebSocketService) {
   app.use('/api/keys', createApiKeysRoutes(wsService));
   app.use('/api/crud', createCrudRoutes(wsService));
   app.use('/api/openclaw', createOpenClawRoutes());
+
+  // Billing routes (plans are public, billing management is protected above)
 
   // Handle static asset requests
   app.get('*', (req, res) => {
@@ -110,4 +114,4 @@ export async function createApp(wsService: WebSocketService) {
   app.use(errorHandler);
 
   return app;
-}  
+}    
