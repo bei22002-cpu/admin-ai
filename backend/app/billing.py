@@ -280,8 +280,8 @@ async def create_checkout_session(
                 "mode": "subscription",
                 "line_items[0][price]": price_id,
                 "line_items[0][quantity]": "1",
-                "success_url": success_url or "https://mcpgrid.com/billing?success=true",
-                "cancel_url": cancel_url or "https://mcpgrid.com/billing?canceled=true",
+                "success_url": success_url or os.getenv("FRONTEND_URL", "https://mcp-tray-app-qrjt16oz.devinapps.com") + "/billing?success=true",
+                "cancel_url": cancel_url or os.getenv("FRONTEND_URL", "https://mcp-tray-app-qrjt16oz.devinapps.com") + "/billing?canceled=true",
                 "metadata[user_id]": str(user_id),
                 "metadata[plan]": plan,
             },
@@ -309,7 +309,7 @@ async def create_portal_session(
             headers={"Authorization": f"Bearer {STRIPE_SECRET_KEY}"},
             data={
                 "customer": stripe_customer_id,
-                "return_url": return_url or "https://mcpgrid.com/billing",
+                "return_url": return_url or os.getenv("FRONTEND_URL", "https://mcp-tray-app-qrjt16oz.devinapps.com") + "/billing",
             },
         )
         if response.status_code == 200:
