@@ -9,6 +9,7 @@ import { createMetricsRoutes } from './routes/metrics.routes';
 import { createSettingsRoutes } from './routes/settings.routes';
 import { createApiKeysRoutes } from './routes/apiKeys.routes';
 import { createCrudRoutes } from './routes/crud.routes';
+import { createOpenClawRoutes } from './routes/openclaw.routes';
 import { createHealthRoutes } from './routes/health.routes';
 import configRoutes from './routes/config.routes';
 import { errorHandler } from './middleware/errorHandler';
@@ -94,6 +95,7 @@ export async function createApp(wsService: WebSocketService) {
   app.use('/api/settings', createSettingsRoutes(wsService));
   app.use('/api/keys', createApiKeysRoutes(wsService));
   app.use('/api/crud', createCrudRoutes(wsService));
+  app.use('/api/openclaw', createOpenClawRoutes());
 
   // Handle static asset requests
   app.get('*', (req, res) => {
@@ -108,4 +110,4 @@ export async function createApp(wsService: WebSocketService) {
   app.use(errorHandler);
 
   return app;
-} 
+}  
