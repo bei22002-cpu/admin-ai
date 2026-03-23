@@ -25,5 +25,9 @@ export function createOpenClawRoutes() {
   // Messaging
   router.post('/message', asyncHandler(controller.sendMessage.bind(controller)));
 
+  // Conversation history
+  router.get('/conversations', asyncHandler(controller.getConversationHistory.bind(controller)));
+  router.delete('/conversations', asyncHandler(controller.clearConversationHistory.bind(controller)));
+
   return router;
 }

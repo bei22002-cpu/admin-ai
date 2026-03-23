@@ -1,6 +1,8 @@
-import { Request, Response } from 'express';
+import { Response } from 'express';
 import { RequestWithUser } from '../types/express';
 import { OpenClawService, getOpenClawService, OpenClawSkill } from '../services/openclaw.service';
+import { AppDataSource } from '../database';
+import { OpenClawConversation } from '../database/entities/OpenClawConversation';
 import { logger } from '../utils/logger';
 
 export class OpenClawController {
@@ -191,7 +193,7 @@ export class OpenClawController {
   }
 
   /**
-   * Send a message to OpenClaw
+   * Send a message to OpenClaw and save to conversation history
    */
   async sendMessage(req: RequestWithUser, res: Response) {
     try {
@@ -202,12 +204,83 @@ export class OpenClawController {
         return res.status(400).json({ error: 'Message content is required' });
       }
 
+      // Save user message to conversation history
+      if (userId) {
+        try {
+          const repo = AppDataSource.getRepository(OpenClawConversation);
+          const userMsg = repo.create({ userId, role: 'user' as const, content });
+          await repo.save(userMsg);
+        } catch (dbError) {
+          logger.warn('Failed to save user message to history:', dbError);
+        }
+      }
+
       const response = await this.openClawService.sendMessage(content, userId);
+
+      // Save assistant response to conversation history
+      if (userId) {
+        try {
+          const repo = AppDataSource.getRepository(OpenClawConversation);
+          const assistantMsg = repo.create({ userId, role: 'assistant' as const, content: response });
+          await repo.save(assistantMsg);
+        } catch (dbError) {
+          logger.warn('Failed to save assistant message to history:', dbError);
+        }
+      }
+
       res.json({ response });
     } catch (error) {
       logger.error('Error sending message to OpenClaw:', error);
       const message = error instanceof Error ? error.message : 'Failed to send message';
       res.status(500).json({ error: message });
+    }
+  }
+
+  /**
+   * Get conversation history for the current user
+   */
+  async getConversationHistory(req: RequestWithUser, res: Response) {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json({ error: 'User not authenticated' });
+      }
+
+      const limit = parseInt(req.query.limit as string) || 50;
+      const offset = parseInt(req.query.offset as string) || 0;
+
+      const repo = AppDataSource.getRepository(OpenClawConversation);
+      const [messages, total] = await repo.findAndCount({
+        where: { userId },
+        order: { createdAt: 'ASC' },
+        take: limit,
+        skip: offset,
+      });
+
+      res.json({ messages, total, limit, offset });
+    } catch (error) {
+      logger.error('Error getting conversation history:', error);
+      res.status(500).json({ error: 'Failed to get conversation history' });
+    }
+  }
+
+  /**
+   * Clear conversation history for the current user
+   */
+  async clearConversationHistory(req: RequestWithUser, res: Response) {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json({ error: 'User not authenticated' });
+      }
+
+      const repo = AppDataSource.getRepository(OpenClawConversation);
+      await repo.delete({ userId });
+
+      res.json({ success: true, message: 'Conversation history cleared' });
+    } catch (error) {
+      logger.error('Error clearing conversation history:', error);
+      res.status(500).json({ error: 'Failed to clear conversation history' });
     }
   }
 }

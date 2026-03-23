@@ -40,6 +40,17 @@ export interface OpenClawConfig {
   channels: string[];
 }
 
+export interface ConversationMessage {
+  id: string;
+  userId: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  skillId?: string;
+  skillName?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+}
+
 class OpenClawFrontendService {
   /**
    * Get OpenClaw service status
@@ -140,6 +151,31 @@ class OpenClawFrontendService {
       return response.data.response;
     } catch (error) {
       logger.error('Failed to send message to OpenClaw:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get conversation history
+   */
+  async getConversationHistory(limit = 50, offset = 0): Promise<{ messages: ConversationMessage[]; total: number }> {
+    try {
+      const response = await api.get(`/openclaw/conversations?limit=${limit}&offset=${offset}`);
+      return response.data;
+    } catch (error) {
+      logger.error('Failed to get conversation history:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Clear conversation history
+   */
+  async clearConversationHistory(): Promise<void> {
+    try {
+      await api.delete('/openclaw/conversations');
+    } catch (error) {
+      logger.error('Failed to clear conversation history:', error);
       throw error;
     }
   }
