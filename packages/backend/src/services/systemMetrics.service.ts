@@ -987,6 +987,21 @@ export class SystemMetricsService extends EventEmitter {
     }
   }
 
+  public async getSuspiciousIPs(): Promise<string[]> {
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const ipAttempts = new Map<string, number>();
+    this.authLogs
+      .filter(log => log.action === 'failed_login' && new Date(log.timestamp).getTime() > sevenDaysAgo.getTime())
+      .forEach(log => {
+        const count = ipAttempts.get(log.ip) || 0;
+        ipAttempts.set(log.ip, count + 1);
+      });
+    return Array.from(ipAttempts.entries())
+      .filter(([_, count]) => count > 5)
+      .map(([ip]) => ip);
+  }
+
   public async getSecurityInsights(): Promise<Record<string, any>> {
     try {
       // Get security events from the last 7 days
@@ -1036,7 +1051,7 @@ export class SystemMetricsService extends EventEmitter {
     }
   }
 
-  private calculateSecurityScore(events: SecurityEvent[], suspiciousIPCount: number): number {
+  public calculateSecurityScore(events: SecurityEvent[], suspiciousIPCount: number): number {
     // Start with a perfect score and deduct based on security issues
     let score = 100;
     
@@ -1051,7 +1066,7 @@ export class SystemMetricsService extends EventEmitter {
     return Math.max(0, Math.min(100, score));
   }
 
-  private generateSecurityRecommendations(events: SecurityEvent[], suspiciousIPs: string[]): string[] {
+  public generateSecurityRecommendations(events: SecurityEvent[], suspiciousIPs: string[]): string[] {
     const recommendations: string[] = [];
     
     if (suspiciousIPs.length > 0) {
@@ -1151,7 +1166,7 @@ export class SystemMetricsService extends EventEmitter {
     }
   }
 
-  private calculateRequestTrend(): Record<string, any> {
+  public calculateRequestTrend(): Record<string, any> {
     // Calculate request trend over the last 7 days vs previous 7 days
     const now = Date.now();
     const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);

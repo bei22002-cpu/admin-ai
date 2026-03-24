@@ -26,7 +26,8 @@ import {
   Logout as LogoutIcon,
   SmartToy as AIIcon,
   Key as KeyIcon,
-  SettingsInputComponent as SettingsInputComponentIcon
+  SettingsInputComponent as SettingsInputComponentIcon,
+  SmartToy as OpenClawIcon
 } from '@mui/icons-material';
 import { useTheme } from '../providers/ThemeProvider';
 import { useAuth } from '../contexts/AuthContext';
@@ -78,7 +79,8 @@ export const Layout: React.FC = () => {
     { text: 'CRUD Pages', icon: <StorageIcon />, path: '/crud' },
     { text: 'API Keys', icon: <KeyIcon />, path: '/api-keys' },
     { divider: true },
-    { text: 'AI Settings', icon: <SettingsIcon />, path: '/ai/settings' },
+    { text: 'AI Settings', icon: <SettingsIcon />, path: '/ai-settings' },
+    { text: 'OpenClaw', icon: <OpenClawIcon />, path: '/openclaw' },
     { text: 'Settings', icon: <SettingsIcon />, path: '/settings' },
     { divider: true }
   ];
@@ -205,4 +207,4 @@ export const Layout: React.FC = () => {
       <AIAssistantPanel />
     </Box>
   );
-}; 
+};  

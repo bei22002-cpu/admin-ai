@@ -50,6 +50,17 @@ const defaultProviders: Record<LLMProvider, AIProviderConfig> = {
     selectedModel: 'claude-3-opus',
     apiKeyPlaceholder: 'sk-ant-...',
     isActive: false
+  },
+  openclaw: {
+    id: 'openclaw',
+    provider: 'openclaw',
+    name: 'OpenClaw',
+    description: 'Connect your personal AI assistant with business skills — website builder, content creation, social media, email outreach, analytics, and invoicing',
+    icon: '🦞',
+    defaultModel: 'openclaw-gateway',
+    selectedModel: 'openclaw-gateway',
+    apiKeyPlaceholder: 'http://localhost:4767 (Gateway URL)',
+    isActive: false
   }
 } as const;
 
@@ -178,19 +189,24 @@ export const AISettings: React.FC = () => {
                 id: config.provider,
                 name: config.provider === 'openai' ? 'OpenAI' : 
                       config.provider === 'gemini' ? 'Google Gemini' : 
-                      config.provider === 'anthropic' ? 'Anthropic' : config.provider,
+                      config.provider === 'anthropic' ? 'Anthropic' :
+                      config.provider === 'openclaw' ? 'OpenClaw' : config.provider,
                 description: config.provider === 'openai' ? 'Integrate with OpenAI models like GPT-4 and GPT-3.5' :
                             config.provider === 'gemini' ? 'Access Google\'s latest AI models' :
-                            config.provider === 'anthropic' ? 'Use Claude and other Anthropic models' : '',
+                            config.provider === 'anthropic' ? 'Use Claude and other Anthropic models' :
+                            config.provider === 'openclaw' ? 'Connect your personal AI assistant with business skills' : '',
                 icon: config.provider === 'openai' ? '🤖' :
                       config.provider === 'gemini' ? '🧠' :
-                      config.provider === 'anthropic' ? '🌟' : '🔌',
+                      config.provider === 'anthropic' ? '🌟' :
+                      config.provider === 'openclaw' ? '🦞' : '🔌',
                 defaultModel: config.provider === 'openai' ? 'gpt-4' :
                              config.provider === 'gemini' ? 'gemini-2.0-flash' :
-                             config.provider === 'anthropic' ? 'claude-3-opus' : '',
+                             config.provider === 'anthropic' ? 'claude-3-opus' :
+                             config.provider === 'openclaw' ? 'openclaw-gateway' : '',
                 apiKeyPlaceholder: config.provider === 'openai' ? 'sk-...' :
                                   config.provider === 'gemini' ? 'API Key' :
-                                  config.provider === 'anthropic' ? 'sk-ant-...' : 'API Key',
+                                  config.provider === 'anthropic' ? 'sk-ant-...' :
+                                  config.provider === 'openclaw' ? 'http://localhost:4767 (Gateway URL)' : 'API Key',
                 provider: config.provider
               }}
               config={config}

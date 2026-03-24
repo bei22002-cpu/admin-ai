@@ -205,6 +205,7 @@ export class MonitoringService extends EventEmitter {
   private async processHealthData(rawHealth: SystemHealth): Promise<SystemHealth> {
     return {
       timestamp: new Date().toISOString(),
+      score: rawHealth.score ?? 100,
       services: rawHealth.services || {},
       resources: {
         cpu: {

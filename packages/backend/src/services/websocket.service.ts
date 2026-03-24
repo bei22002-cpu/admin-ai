@@ -181,7 +181,8 @@ export class WebSocketService {
               // Trim the set if it gets too large
               if (this.recentlyProcessedMessages.size > this.MAX_RECENT_MESSAGES) {
                 const iterator = this.recentlyProcessedMessages.values();
-                this.recentlyProcessedMessages.delete(iterator.next().value);
+                const first = iterator.next().value;
+                if (first !== undefined) this.recentlyProcessedMessages.delete(first);
               }
             }
             
@@ -436,11 +437,12 @@ export class WebSocketService {
     
     // Always log AI messages for debugging
     if (isAIMessage) {
+      const d = data as any;
       console.log(`Sending ${eventName} to user ${userId}:`, {
-        id: data.id,
-        content: typeof data.content === 'string' ? data.content.substring(0, 50) + '...' : data.content,
-        role: data.role,
-        metadata: data.metadata
+        id: d.id,
+        content: typeof d.content === 'string' ? d.content.substring(0, 50) + '...' : d.content,
+        role: d.role,
+        metadata: d.metadata
       });
     }
     

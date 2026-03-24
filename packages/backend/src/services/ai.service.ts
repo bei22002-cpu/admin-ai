@@ -22,6 +22,7 @@ import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
 import { ArrayContains } from 'typeorm';
 import { WebSocketEvents } from '@admin-ai/shared/src/types/websocket';
+import { OpenClawService, getOpenClawService } from './openclaw.service';
 
 const aiSettingsRepository = AppDataSource.getRepository('AISettings');
 
@@ -98,14 +99,18 @@ export class AIService extends EventEmitter {
     systemCommands: []
   };
 
+  private openClawService: OpenClawService | null = null;
+
   private llmClients: {
     openai: OpenAI | undefined;
     gemini: GoogleGenerativeAI | undefined;
     anthropic: Anthropic | undefined;
+    openclaw: OpenClawService | undefined;
   } = {
     openai: undefined,
     gemini: undefined,
-    anthropic: undefined
+    anthropic: undefined,
+    openclaw: undefined
   };
 
   /**
@@ -319,6 +324,14 @@ Generate a response that:
           this.anthropic = new Anthropic({ apiKey });
           this.llmClients.anthropic = this.anthropic;
           break;
+        case 'openclaw':
+          this.openClawService = getOpenClawService();
+          await this.openClawService.initialize({ gatewayUrl: apiKey, enabled: true });
+          if (this.webSocketService) {
+            this.openClawService.setWebSocketService(this.webSocketService);
+          }
+          this.llmClients.openclaw = this.openClawService;
+          break;
         default:
           throw new Error(`Unsupported provider: ${provider}`);
       }
@@ -484,6 +497,11 @@ Generate a response that:
           });
           responseContent = anthropicResponse.content[0]?.text || 'No response generated';
           break;
+
+        case 'openclaw':
+          const openClawSvc = llmClient as OpenClawService;
+          responseContent = await openClawSvc.sendMessage(content, userId);
+          break;
           
         default:
           responseContent = `Provider ${provider.provider} is not supported yet.`;
@@ -552,7 +570,7 @@ Generate a response that:
   public async analyzeMetrics(metrics: SystemMetrics): Promise<any> {
     try {
       // Get the active provider
-      const activeProvider = await this.getActiveProvider(this.currentUserId);
+      const activeProvider = await this.getActiveProvider(this.currentUserId ?? undefined);
       if (!activeProvider || !this.isReady) {
         // If no active provider, generate synthetic analysis
         return this.generateSyntheticMetricsAnalysis(metrics);
@@ -634,7 +652,8 @@ Generate a response that:
   private generateSyntheticMetricsAnalysis(metrics: SystemMetrics): any {
     const cpuStatus = metrics.cpuUsage > 80 ? 'high' : metrics.cpuUsage > 50 ? 'moderate' : 'normal';
     const memoryStatus = metrics.memoryUsage > 80 ? 'high' : metrics.memoryUsage > 50 ? 'moderate' : 'normal';
-    const responseTimeStatus = metrics.averageResponseTime > 500 ? 'slow' : metrics.averageResponseTime > 200 ? 'moderate' : 'fast';
+    const avgResponseTime = metrics.averageResponseTime ?? 0;
+    const responseTimeStatus = avgResponseTime > 500 ? 'slow' : avgResponseTime > 200 ? 'moderate' : 'fast';
     
     const issues = [];
     const recommendations = [];
@@ -662,7 +681,7 @@ Generate a response that:
     // Calculate a synthetic health score
     const cpuScore = 100 - metrics.cpuUsage;
     const memoryScore = 100 - metrics.memoryUsage;
-    const responseTimeScore = Math.max(0, 100 - (metrics.averageResponseTime / 10));
+    const responseTimeScore = Math.max(0, 100 - (avgResponseTime / 10));
     const errorScore = Math.max(0, 100 - (metrics.errorCount * 5));
     
     const overallScore = Math.round((cpuScore + memoryScore + responseTimeScore + errorScore) / 4);
@@ -681,7 +700,7 @@ Generate a response that:
   public async analyzeError(error: { error: any; context: any }): Promise<any> {
     try {
       // Get the active provider
-      const activeProvider = await this.getActiveProvider(this.currentUserId);
+      const activeProvider = await this.getActiveProvider(this.currentUserId ?? undefined);
       if (!activeProvider || !this.isReady) {
         // If no active provider, generate synthetic analysis
         return this.generateSyntheticErrorAnalysis(error);
@@ -736,8 +755,8 @@ Generate a response that:
         provider: activeProvider.provider,
         model: activeProvider.selectedModel,
       };
-    } catch (error) {
-      logger.error('Error analyzing error with AI:', error);
+    } catch (err) {
+      logger.error('Error analyzing error with AI:', err);
       return this.generateSyntheticErrorAnalysis(error);
     }
   }

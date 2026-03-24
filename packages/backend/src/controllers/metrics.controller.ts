@@ -217,21 +217,21 @@ export class MetricsController {
       const suspiciousIPs = await this.systemMetricsService.getSuspiciousIPs();
       
       // Calculate security metrics
-      const failedLogins = securityEvents.filter(event => 
+      const failedLogins = securityEvents.filter((event: any) => 
         event.type === 'auth' && event.action === 'login' && !event.success
       ).length;
       
-      const suspiciousActivities = securityEvents.filter(event => 
+      const suspiciousActivities = securityEvents.filter((event: any) => 
         event.severity === 'high' || event.severity === 'critical'
       ).length;
       
       // Generate vulnerabilities based on error logs
       const vulnerabilities = errorLogs
-        .filter(log => log.message.toLowerCase().includes('security') || 
+        .filter((log: any) => log.message.toLowerCase().includes('security') || 
                       log.message.toLowerCase().includes('vulnerability') ||
                       log.message.toLowerCase().includes('exploit'))
         .slice(0, 3)
-        .map(log => ({
+        .map((log: any) => ({
           type: log.message.split(':')[0] || 'Security Issue',
           description: log.message,
           severity: log.level === 'error' ? 'high' : 'medium'
@@ -328,9 +328,9 @@ export class MetricsController {
       const timestamp = new Date().toISOString();
 
       // Send metrics update
-      this.wsService.sendToUser(userId, 'metrics:update', {
+      (this.wsService as any).sendToUser(userId, 'metrics:update', {
         health,
-        metrics,
+        metrics: metrics || {},
         timestamp
       });
 
@@ -341,21 +341,21 @@ export class MetricsController {
       const locations = await this.systemMetricsService.getRequestLocations();
 
       // Send logs updates
-      this.wsService.sendToUser(userId, 'logs:update', recentLogs);
-      this.wsService.sendToUser(userId, 'error:logs:update', errorLogs);
-      this.wsService.sendToUser(userId, 'auth:logs:update', authLogs);
-      this.wsService.sendToUser(userId, 'request:metrics:update', metrics || []);
-      this.wsService.sendToUser(userId, 'locations:update', locations);
+      (this.wsService as any).sendToUser(userId, 'logs:update', recentLogs);
+      (this.wsService as any).sendToUser(userId, 'error:logs:update', errorLogs);
+      (this.wsService as any).sendToUser(userId, 'auth:logs:update', authLogs);
+      (this.wsService as any).sendToUser(userId, 'request:metrics:update', metrics || []);
+      (this.wsService as any).sendToUser(userId, 'locations:update', locations);
 
       // Get and send insights
-      const performanceInsights = await this.getPerformanceInsights({} as RequestWithUser, {} as Response);
-      const securityInsights = await this.getSecurityInsights({} as RequestWithUser, {} as Response);
-      const usageInsights = await this.getUsageInsights({} as RequestWithUser, {} as Response);
+      const performanceInsights = await this.systemMetricsService.getPerformanceInsights();
+      const securityInsights = await this.systemMetricsService.getSecurityInsights();
+      const usageInsights = await this.systemMetricsService.getUsageInsights();
 
       // Send insights updates
-      this.wsService.sendToUser(userId, 'insights:performance:update', performanceInsights);
-      this.wsService.sendToUser(userId, 'insights:security:update', securityInsights);
-      this.wsService.sendToUser(userId, 'insights:usage:update', usageInsights);
+      (this.wsService as any).sendToUser(userId, 'insights:performance:update', performanceInsights);
+      (this.wsService as any).sendToUser(userId, 'insights:security:update', securityInsights);
+      (this.wsService as any).sendToUser(userId, 'insights:usage:update', usageInsights);
     } catch (error) {
       logger.error('Failed to handle websocket metrics request:', error);
       throw new AppError(500, 'Failed to handle websocket metrics request');
@@ -367,4 +367,4 @@ export class MetricsController {
 export const metricsController = new MetricsController(
   require('../services/ai.service').aiService,
   require('../services/websocket.service').wsService
-); 
+);    

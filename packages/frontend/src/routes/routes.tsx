@@ -45,4 +45,4 @@ export const AppRoutes: React.FC = () => {
   );
 };
 
-export default routes; 
+export default routes;    

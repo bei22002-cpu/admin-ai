@@ -34,7 +34,7 @@ const createCacheKey = (prefix: string) => (req: Request): string => {
 
 // Helper function to wrap controller methods with proper typing
 const wrapController = (
-  fn: (req: RequestWithUser, res: Response) => Promise<void>
+  fn: (req: any, res: Response) => Promise<any>
 ) => {
   return asyncHandler(async (req, res, next) => {
     // The asyncHandler will check for authentication with requireAuth=true
@@ -49,7 +49,7 @@ export function createMetricsRoutes(wsService: WebSocketService) {
   const metricsController = new MetricsController(aiService, wsService);
   
   // Set the metrics controller in the WebSocket service
-  wsService.setMetricsController(metricsController);
+  wsService.setMetricsController(metricsController as any);
 
   // Health endpoint should be public (no auth required)
   router.get('/health', 

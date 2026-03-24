@@ -253,15 +253,21 @@ export class KafkaService {
     try {
       logger.debug('Received system metrics message from Kafka');
       
+      if (!this.wsService) {
+        logger.warn('WebSocket service not initialized, skipping metrics broadcast');
+        return;
+      }
+      
       // Broadcast to all connected clients
-      this.wsService.broadcast('metrics:update', {
+      (this.wsService as any).broadcast('metrics:update', {
         health: message.data?.health,
-        metrics: message.data?.metrics
+        metrics: message.data?.metrics,
+        timestamp: new Date().toISOString()
       });
       
       // Also broadcast individual updates for dashboard widgets
       if (message.data?.health) {
-        this.wsService.broadcast('health_update', message.data.health);
+        (this.wsService as any).broadcast('health_update', message.data.health);
       }
       
       if (message.data?.metrics) {
@@ -270,34 +276,28 @@ export class KafkaService {
         
         // Request metrics
         if (metrics.requests) {
-          this.wsService.broadcast('request_metrics_update', metrics.requests);
+          (this.wsService as any).broadcast('request_metrics_update', metrics.requests);
         }
         
         // Location data
         if (metrics.locations) {
-          this.wsService.broadcast('locations_update', metrics.locations);
+          (this.wsService as any).broadcast('locations_update', metrics.locations);
         }
         
         // Logs
         if (metrics.logs) {
-          this.wsService.broadcast('logs_update', metrics.logs);
+          (this.wsService as any).broadcast('logs_update', metrics.logs);
         }
         
         // Error logs
         if (metrics.errors) {
-          this.wsService.broadcast('error_logs_update', metrics.errors);
+          (this.wsService as any).broadcast('error_logs_update', metrics.errors);
         }
         
         // Auth logs
         if (metrics.authLogs) {
-          this.wsService.broadcast('auth_logs_update', metrics.authLogs);
+          (this.wsService as any).broadcast('auth_logs_update', metrics.authLogs);
         }
-      }
-      
-      // Trigger AI analysis of the metrics
-      if (this.aiService && message.data?.metrics) {
-        const analysis = await this.aiService.analyzeMetrics(message.data.metrics);
-        this.wsService.broadcast('metrics:analysis', analysis);
       }
       
     } catch (error) {
@@ -558,4 +558,4 @@ export class KafkaService {
 }
 
 // Export a singleton instance
-export const kafkaService = KafkaService.getInstance(); 
+export const kafkaService = KafkaService.getInstance();  

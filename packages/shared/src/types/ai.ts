@@ -157,6 +157,11 @@ export interface SystemMetrics {
   errorCount: number;
   totalRequests: number;
   activeUsers: number;
+  averageResponseTime?: number;
+  warningCount?: number;
+  database?: {
+    active_connections: number;
+  };
   cpu?: {
     usage: number;
     status: ResourceStatus;
@@ -173,6 +178,11 @@ export interface SystemMetrics {
     usage: number;
     status: ResourceStatus;
   };
+  topPaths?: Array<{
+    path: string;
+    count: number;
+    averageResponseTime: number;
+  }>;
 }
 
 export interface RequestMetric {
