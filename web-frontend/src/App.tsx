@@ -1247,6 +1247,8 @@ function ConsoleScreen({
                       const data = await res.json();
                       if (data.status === "success") {
                         setVisionResults(prev => [{ type: "ocr", text: data.text || "No text found", time: new Date().toLocaleTimeString() }, ...prev]);
+                      } else {
+                        setVisionResults(prev => [{ type: "error", text: data.message || "OCR failed", time: new Date().toLocaleTimeString() }, ...prev]);
                       }
                     } catch { setVisionResults(prev => [{ type: "error", text: "OCR API unreachable", time: new Date().toLocaleTimeString() }, ...prev]); }
                     setVisionLoading(false);
