@@ -1,16 +1,18 @@
 """MCP Grid Backend - TRON-themed AI Desktop Assistant API."""
 
 import asyncio
+import io
 import logging
 import os
 import time
+import zipfile
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 logger = logging.getLogger("mcp_grid")
@@ -58,7 +60,7 @@ from app.commands import (
     handle_testgen,
     handle_voice,
 )
-from app.commands.code import _progress_events
+from app.commands.code import OUTPUT_BASE, _progress_events, get_project_files, list_projects as list_generated_projects
 from app.database import (
     create_user,
     get_user_by_email,
@@ -701,6 +703,82 @@ async def admin_set_plan(
         return {"status": "error", "message": f"Unknown plan: {plan}"}
     await update_user_plan(user_id=target_id, plan=plan)
     return {"status": "success", "message": f"Plan set to {plan} for user {target_id}"}
+
+
+# ── File Download Endpoints ────────────────────────────────────
+
+
+@app.get("/files/projects")
+async def list_file_projects() -> dict:
+    """List all generated projects."""
+    projects = list_generated_projects()
+    return {"status": "success", "projects": projects}
+
+
+@app.get("/files/{project_name}")
+async def get_project_file_list(project_name: str) -> dict:
+    """Get all files and contents for a project."""
+    files = get_project_files(project_name)
+    if not files:
+        return {"status": "error", "message": f"Project not found: {project_name}"}
+    return {"status": "success", "project_name": project_name, "files": files}
+
+
+@app.get("/files/{project_name}/zip")
+async def download_project_zip(project_name: str) -> Response:
+    """Download an entire project as a ZIP file."""
+    project_dir = os.path.join(OUTPUT_BASE, project_name)
+    if not os.path.isdir(project_dir):
+        return JSONResponse(
+            status_code=404,
+            content={"status": "error", "message": f"Project not found: {project_name}"},
+        )
+    buf = io.BytesIO()
+    skip_dirs = {".git", "__pycache__", "node_modules", ".venv", "venv"}
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, filenames in os.walk(project_dir):
+            dirs[:] = [d for d in dirs if d not in skip_dirs]
+            for fname in filenames:
+                full = os.path.join(root, fname)
+                arc_name = os.path.join(project_name, os.path.relpath(full, project_dir))
+                zf.write(full, arc_name)
+    buf.seek(0)
+    return Response(
+        content=buf.read(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{project_name}.zip"'},
+    )
+
+
+@app.get("/files/{project_name}/{file_path:path}")
+async def download_single_file(project_name: str, file_path: str) -> Response:
+    """Download a single file from a project."""
+    project_dir = os.path.join(OUTPUT_BASE, project_name)
+    full_path = os.path.normpath(os.path.join(project_dir, file_path))
+    # Prevent directory traversal
+    if not full_path.startswith(project_dir) or not os.path.isfile(full_path):
+        return JSONResponse(
+            status_code=404,
+            content={"status": "error", "message": f"File not found: {file_path}"},
+        )
+    with open(full_path, "rb") as f:
+        content = f.read()
+    # Guess media type
+    ext = os.path.splitext(file_path)[1].lower()
+    media_types = {
+        ".py": "text/x-python", ".js": "text/javascript", ".ts": "text/typescript",
+        ".html": "text/html", ".css": "text/css", ".json": "application/json",
+        ".md": "text/markdown", ".txt": "text/plain", ".yaml": "text/yaml",
+        ".yml": "text/yaml", ".toml": "text/plain", ".rs": "text/plain",
+        ".go": "text/plain", ".java": "text/plain", ".rb": "text/plain",
+    }
+    media = media_types.get(ext, "application/octet-stream")
+    fname = os.path.basename(file_path)
+    return Response(
+        content=content,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 if __name__ == "__main__":

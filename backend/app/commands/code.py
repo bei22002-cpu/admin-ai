@@ -45,6 +45,44 @@ _provider_rate_limit_until: dict[str, float] = {
 MAX_FIX_ATTEMPTS = 10
 MAX_FIX_ATTEMPTS_SIMPLE = 5
 OUTPUT_BASE = os.path.join(os.path.expanduser("~"), "mcp_generated")
+
+
+def get_project_files(project_name: str) -> list[dict]:
+    """Read all files in a project and return [{path, content}] list."""
+    project_dir = os.path.join(OUTPUT_BASE, project_name)
+    if not os.path.isdir(project_dir):
+        return []
+    result = []
+    skip_dirs = {".git", "__pycache__", "node_modules", ".venv", "venv"}
+    skip_exts = {".pyc", ".pyo", ".so", ".o", ".exe", ".dll"}
+    for root, dirs, files in os.walk(project_dir):
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
+        for fname in sorted(files):
+            if any(fname.endswith(ext) for ext in skip_exts):
+                continue
+            full = os.path.join(root, fname)
+            rel = os.path.relpath(full, project_dir)
+            try:
+                with open(full) as f:
+                    content = f.read(50000)  # Cap at 50KB per file
+                result.append({"path": rel, "content": content})
+            except (UnicodeDecodeError, OSError):
+                result.append({"path": rel, "content": "(binary file)"})
+    return result
+
+
+def list_projects() -> list[dict]:
+    """List all generated projects with basic info."""
+    if not os.path.isdir(OUTPUT_BASE):
+        return []
+    projects = []
+    for name in sorted(os.listdir(OUTPUT_BASE)):
+        pdir = os.path.join(OUTPUT_BASE, name)
+        if not os.path.isdir(pdir) or name.startswith("."):
+            continue
+        file_count = sum(1 for _, _, fs in os.walk(pdir) for _ in fs)
+        projects.append({"name": name, "file_count": file_count})
+    return projects
 MEMORY_FILE = os.path.join(OUTPUT_BASE, ".mcp_code_memory.json")
 EXEC_TIMEOUT = 120  # seconds
 EXEC_TIMEOUT_SIMPLE = 30  # seconds
@@ -1633,6 +1671,8 @@ async def _handle_edit(request: dict, api_key: str, has_vscode: bool) -> dict:
             "saved_to": filepath,
             "output": stdout[:1000] if stdout else "",
             "error": stderr[:500] if stderr and not success else "",
+            "generated_code": new_code,
+            "file_contents": [{"path": os.path.basename(filepath), "content": new_code}],
         },
     }
 
@@ -1696,6 +1736,8 @@ async def _handle_fix_existing(request: dict, api_key: str, has_vscode: bool) ->
             "attempts": attempt,
             "output": stdout[:1000] if stdout else "",
             "error": stderr[:500] if stderr and not success else "",
+            "generated_code": code,
+            "file_contents": [{"path": os.path.basename(filepath), "content": code}],
         },
     }
 
@@ -1797,6 +1839,8 @@ async def _handle_followup(request: dict, api_key: str, has_vscode: bool) -> dic
             "previous_file": prev_filepath,
             "output": stdout[:1000] if stdout else "",
             "error": stderr[:500] if stderr and not success else "",
+            "generated_code": new_code,
+            "file_contents": [{"path": os.path.basename(filepath), "content": new_code}],
             "deps_installed": install_log,
         },
     }
@@ -2076,6 +2120,7 @@ async def _handle_single_file(
             "request": args,
             "status": "success" if success else "partial",
             "language": lang,
+            "project_name": project_name,
             "saved_to": filepath,
             "attempts": attempt,
             "model": model_used,
@@ -2083,6 +2128,7 @@ async def _handle_single_file(
             "output": stdout[:2000] if stdout else "",
             "final_error": stderr[:1000] if stderr and not success else "",
             "generated_code": code,
+            "file_contents": [{"path": os.path.basename(filepath), "content": code}],
             "deps_installed": install_log,
         },
     }
@@ -2961,6 +3007,9 @@ async def _run_single_pipeline_pass(
     if complex_mode:
         pipeline_phases.append("Polish & README")
 
+    # Collect file contents for download
+    file_contents = get_project_files(project_name)
+
     return {
         "message": (
             f"Project assimilated: {args}. "
@@ -2972,6 +3021,7 @@ async def _run_single_pipeline_pass(
         "data": {
             "request": args,
             "status": "success" if run_success else "partial",
+            "project_name": project_name,
             "project_dir": project_dir,
             "files": file_list,
             "file_count": len(file_list),
@@ -2985,6 +3035,7 @@ async def _run_single_pipeline_pass(
             "architecture_plan": plan_data.get("architecture", "") if plan_data else "",
             "output": output[:2000] if output else "",
             "error": error[:1000] if error else "",
+            "file_contents": file_contents,
             "deps_installed": install_log,
         },
     }
@@ -3136,6 +3187,9 @@ async def _handle_project_oneshot(
     else:
         model_used = "gpt-4o" if complex_mode else "gpt-4o-mini"
 
+    # Collect file contents for download
+    file_contents = get_project_files(project_name)
+
     return {
         "message": (
             f"Project assimilated: {args}. "
@@ -3145,6 +3199,7 @@ async def _handle_project_oneshot(
         "data": {
             "request": args,
             "status": "success" if run_success else "partial",
+            "project_name": project_name,
             "project_dir": project_dir,
             "files": file_list,
             "file_count": len(file_list),
@@ -3154,6 +3209,7 @@ async def _handle_project_oneshot(
             "architecture_plan": plan_data.get("architecture", "") if plan_data else "",
             "output": output[:2000] if output else "",
             "error": error[:1000] if error else "",
+            "file_contents": file_contents,
             "deps_installed": install_log,
         },
     }
