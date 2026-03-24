@@ -61,6 +61,13 @@ from app.commands import (
     handle_voice,
 )
 from app.commands.code import OUTPUT_BASE, _progress_events, get_project_files, list_projects as list_generated_projects
+from app.vision import (
+    analyze_screenshot,
+    clear_vision_context,
+    extract_text,
+    get_vision_context,
+    set_monitoring,
+)
 from app.database import (
     create_user,
     get_user_by_email,
@@ -779,6 +786,86 @@ async def download_single_file(project_name: str, file_path: str) -> Response:
         media_type=media,
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
+
+
+# ── Vision / Desktop Assistant Endpoints ───────────────────────
+
+
+class VisionAnalyzeRequest(BaseModel):
+    image: str  # base64-encoded PNG
+    prompt: str = ""
+    include_context: bool = True
+
+
+class VisionOCRRequest(BaseModel):
+    image: str  # base64-encoded PNG
+
+
+class MonitoringConfigRequest(BaseModel):
+    enabled: bool | None = None
+    interval: int | None = None
+    auto_actions: bool | None = None
+
+
+@app.post("/vision/analyze")
+async def vision_analyze(request: VisionAnalyzeRequest) -> dict:
+    """Analyze a screenshot using AI vision.
+
+    The Electron desktop app captures the screen and sends the base64 image.
+    The AI analyzes what's on screen and provides helpful context.
+    """
+    if not request.image:
+        return {"status": "error", "message": "No image data provided."}
+    result = await analyze_screenshot(
+        image_b64=request.image,
+        prompt=request.prompt,
+        include_context=request.include_context,
+    )
+    return result
+
+
+@app.post("/vision/ocr")
+async def vision_ocr(request: VisionOCRRequest) -> dict:
+    """Extract text from a screenshot using AI-powered OCR."""
+    if not request.image:
+        return {"status": "error", "message": "No image data provided."}
+    result = await extract_text(image_b64=request.image)
+    return result
+
+
+@app.get("/vision/context")
+async def vision_context_get(limit: int = 20) -> dict:
+    """Get recent vision context memory.
+
+    Returns what the AI has recently observed on the user's screen.
+    """
+    return get_vision_context(limit=limit)
+
+
+@app.delete("/vision/context")
+async def vision_context_clear() -> dict:
+    """Clear the vision context memory."""
+    return clear_vision_context()
+
+
+@app.post("/vision/monitoring")
+async def vision_monitoring(request: MonitoringConfigRequest) -> dict:
+    """Configure continuous screen monitoring.
+
+    When enabled, the Electron app will periodically capture and analyze
+    the screen, building up context about what the user is doing.
+    """
+    return set_monitoring(
+        enabled=request.enabled,
+        interval=request.interval,
+        auto_actions=request.auto_actions,
+    )
+
+
+@app.get("/vision/monitoring")
+async def vision_monitoring_status() -> dict:
+    """Get current monitoring configuration and status."""
+    return set_monitoring()  # returns current state without changes
 
 
 if __name__ == "__main__":

@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MCP Vision Overlay</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Segoe UI', 'Courier New', monospace;
+      background: transparent;
+      color: #00ffd5;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    .overlay-container {
+      width: 100%;
+      height: 100vh;
+      background: rgba(0, 8, 20, 0.92);
+      border: 1px solid #00ffd5;
+      border-radius: 12px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 0 30px rgba(0, 255, 213, 0.15), inset 0 0 60px rgba(0, 255, 213, 0.03);
+    }
+
+    /* Title Bar */
+    .title-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: rgba(0, 255, 213, 0.08);
+      border-bottom: 1px solid rgba(0, 255, 213, 0.2);
+      -webkit-app-region: drag;
+      cursor: move;
+    }
+
+    .title-bar .title {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: #00ffd5;
+    }
+
+    .title-bar .controls {
+      display: flex;
+      gap: 6px;
+      -webkit-app-region: no-drag;
+    }
+
+    .title-bar .controls button {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+      font-size: 0;
+      transition: opacity 0.2s;
+    }
+
+    .title-bar .controls button:hover { opacity: 0.7; }
+    .btn-minimize { background: #ffbd2e; }
+    .btn-close { background: #ff5f56; }
+
+    /* Status Bar */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      font-size: 10px;
+      color: rgba(0, 255, 213, 0.6);
+      border-bottom: 1px solid rgba(0, 255, 213, 0.1);
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #00ffd5;
+      animation: pulse 2s infinite;
+    }
+
+    .status-dot.monitoring { background: #ffbd2e; animation: pulse 1s infinite; }
+    .status-dot.error { background: #ff5f56; animation: none; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    /* Action Buttons */
+    .actions {
+      display: flex;
+      gap: 4px;
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(0, 255, 213, 0.1);
+    }
+
+    .actions button {
+      flex: 1;
+      padding: 6px 4px;
+      background: rgba(0, 255, 213, 0.08);
+      border: 1px solid rgba(0, 255, 213, 0.2);
+      border-radius: 6px;
+      color: #00ffd5;
+      font-size: 10px;
+      font-family: inherit;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .actions button:hover {
+      background: rgba(0, 255, 213, 0.15);
+      border-color: #00ffd5;
+    }
+
+    .actions button:active { transform: scale(0.95); }
+    .actions button.active {
+      background: rgba(0, 255, 213, 0.2);
+      border-color: #00ffd5;
+      box-shadow: 0 0 10px rgba(0, 255, 213, 0.2);
+    }
+
+    /* Results Area */
+    .results {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 12px;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .results::-webkit-scrollbar { width: 4px; }
+    .results::-webkit-scrollbar-track { background: transparent; }
+    .results::-webkit-scrollbar-thumb { background: rgba(0, 255, 213, 0.3); border-radius: 2px; }
+
+    .result-entry {
+      margin-bottom: 12px;
+      padding: 8px;
+      background: rgba(0, 255, 213, 0.04);
+      border-left: 2px solid rgba(0, 255, 213, 0.3);
+      border-radius: 0 6px 6px 0;
+    }
+
+    .result-entry .timestamp {
+      font-size: 9px;
+      color: rgba(0, 255, 213, 0.4);
+      margin-bottom: 4px;
+    }
+
+    .result-entry .source {
+      font-size: 9px;
+      color: rgba(0, 255, 213, 0.5);
+      margin-bottom: 4px;
+    }
+
+    .result-entry .analysis {
+      color: rgba(0, 255, 213, 0.85);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .result-entry.ocr .analysis { font-family: 'Courier New', monospace; font-size: 11px; }
+
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: rgba(0, 255, 213, 0.3);
+      text-align: center;
+    }
+
+    .empty-state .icon { font-size: 36px; margin-bottom: 10px; }
+    .empty-state .hint { font-size: 10px; margin-top: 6px; }
+
+    /* Loading spinner */
+    .loading {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      font-size: 11px;
+      color: rgba(0, 255, 213, 0.6);
+    }
+
+    .loading.visible { display: flex; }
+
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(0, 255, 213, 0.2);
+      border-top-color: #00ffd5;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Footer */
+    .footer {
+      padding: 6px 12px;
+      font-size: 9px;
+      color: rgba(0, 255, 213, 0.3);
+      border-top: 1px solid rgba(0, 255, 213, 0.1);
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="overlay-container">
+    <div class="title-bar">
+      <span class="title">MCP Vision</span>
+      <div class="controls">
+        <button class="btn-minimize" onclick="minimizeOverlay()" title="Minimize"></button>
+        <button class="btn-close" onclick="closeOverlay()" title="Close"></button>
+      </div>
+    </div>
+
+    <div class="status-bar">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">Ready</span>
+    </div>
+
+    <div class="actions">
+      <button onclick="analyzeNow()" title="Ctrl+Shift+V">Analyze</button>
+      <button onclick="ocrNow()" title="Ctrl+Shift+T">OCR</button>
+      <button id="monitorBtn" onclick="toggleMonitoring()">Monitor</button>
+      <button onclick="clearResults()">Clear</button>
+    </div>
+
+    <div class="loading" id="loading">
+      <div class="spinner"></div>
+      <span>Analyzing screen...</span>
+    </div>
+
+    <div class="results" id="results">
+      <div class="empty-state" id="emptyState">
+        <div class="icon">&#x1F441;</div>
+        <div>No observations yet</div>
+        <div class="hint">Click "Analyze" or press Ctrl+Shift+V</div>
+      </div>
+    </div>
+
+    <div class="footer">MCP Grid Desktop Assistant</div>
+  </div>
+
+  <script>
+    var isMonitoring = false;
+    var resultEntries = [];
+
+    function setStatus(text, mode) {
+      document.getElementById("statusText").textContent = text;
+      var dot = document.getElementById("statusDot");
+      dot.className = "status-dot";
+      if (mode === "monitoring") dot.classList.add("monitoring");
+      else if (mode === "error") dot.classList.add("error");
+    }
+
+    function showLoading(show) {
+      document.getElementById("loading").className = show ? "loading visible" : "loading";
+    }
+
+    function addResult(type, text, source) {
+      document.getElementById("emptyState").style.display = "none";
+      var container = document.getElementById("results");
+      var entry = document.createElement("div");
+      entry.className = "result-entry" + (type === "ocr" ? " ocr" : "");
+
+      var now = new Date();
+      var timeStr = now.toLocaleTimeString();
+
+      entry.innerHTML =
+        '<div class="timestamp">' + timeStr + " - " + type.toUpperCase() + "</div>" +
+        (source ? '<div class="source">Source: ' + source + "</div>" : "") +
+        '<div class="analysis">' + escapeHtml(text) + "</div>";
+
+      container.insertBefore(entry, container.firstChild);
+      resultEntries.unshift({ type: type, text: text, time: timeStr });
+
+      // Keep max 20 entries visible
+      while (container.children.length > 21) {
+        container.removeChild(container.lastChild);
+      }
+    }
+
+    function escapeHtml(text) {
+      var div = document.createElement("div");
+      div.textContent = text || "";
+      return div.innerHTML;
+    }
+
+    async function analyzeNow() {
+      setStatus("Analyzing...", "monitoring");
+      showLoading(true);
+      try {
+        var result = await window.mcp.analyzeScreen("");
+        showLoading(false);
+        if (result.status === "success") {
+          addResult("analysis", result.analysis || "No analysis returned.", result.capture ? result.capture.source : "");
+          setStatus("Analysis complete", null);
+        } else {
+          addResult("error", result.message || "Analysis failed.", "");
+          setStatus("Error", "error");
+        }
+      } catch (err) {
+        showLoading(false);
+        addResult("error", "Failed: " + err.message, "");
+        setStatus("Error", "error");
+      }
+    }
+
+    async function ocrNow() {
+      setStatus("Extracting text...", "monitoring");
+      showLoading(true);
+      try {
+        var result = await window.mcp.ocrScreen();
+        showLoading(false);
+        if (result.status === "success") {
+          addResult("ocr", result.text || "No text found.", "");
+          setStatus("OCR complete", null);
+        } else {
+          addResult("error", result.message || "OCR failed.", "");
+          setStatus("Error", "error");
+        }
+      } catch (err) {
+        showLoading(false);
+        addResult("error", "OCR failed: " + err.message, "");
+        setStatus("Error", "error");
+      }
+    }
+
+    function toggleMonitoring() {
+      if (isMonitoring) {
+        window.mcp.stopMonitoring();
+        isMonitoring = false;
+        document.getElementById("monitorBtn").classList.remove("active");
+        document.getElementById("monitorBtn").textContent = "Monitor";
+        setStatus("Monitoring stopped", null);
+      } else {
+        window.mcp.startMonitoring(10);
+        isMonitoring = true;
+        document.getElementById("monitorBtn").classList.add("active");
+        document.getElementById("monitorBtn").textContent = "Stop";
+        setStatus("Monitoring (10s)", "monitoring");
+      }
+    }
+
+    function clearResults() {
+      var container = document.getElementById("results");
+      container.innerHTML =
+        '<div class="empty-state" id="emptyState">' +
+        '<div class="icon">&#x1F441;</div>' +
+        "<div>No observations yet</div>" +
+        '<div class="hint">Click &quot;Analyze&quot; or press Ctrl+Shift+V</div>' +
+        "</div>";
+      resultEntries = [];
+      window.mcp.clearVisionContext();
+      setStatus("Cleared", null);
+    }
+
+    function closeOverlay() { window.mcp.closeOverlay(); }
+    function minimizeOverlay() { window.mcp.minimizeOverlay(); }
+
+    // Listen for results from main process (hotkey-triggered)
+    if (window.mcp.onVisionResult) {
+      window.mcp.onVisionResult(function (data) {
+        showLoading(false);
+        if (data.status === "success") {
+          addResult("analysis", data.analysis || "Done.", data.capture ? data.capture.source : "");
+          setStatus("Analysis complete", null);
+        }
+      });
+    }
+
+    if (window.mcp.onMonitoringUpdate) {
+      window.mcp.onMonitoringUpdate(function (data) {
+        if (data.status === "success") {
+          addResult("monitor", data.analysis || "No changes.", data.capture ? data.capture.source : "");
+        }
+      });
+    }
+
+    if (window.mcp.onOcrResult) {
+      window.mcp.onOcrResult(function (data) {
+        showLoading(false);
+        if (data.status === "success") {
+          addResult("ocr", data.text || "No text.", "");
+          setStatus("OCR complete", null);
+        }
+      });
+    }
+
+    // Check initial monitoring state
+    window.mcp.getConfig().then(function (config) {
+      if (config.monitoringEnabled) {
+        isMonitoring = true;
+        document.getElementById("monitorBtn").classList.add("active");
+        document.getElementById("monitorBtn").textContent = "Stop";
+        setStatus("Monitoring (" + config.monitoringInterval + "s)", "monitoring");
+      }
+    });
+  </script>
+</body>
+</html>

@@ -573,6 +573,9 @@ function ConsoleScreen({
   const [projects, setProjects] = useState<Project[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [showBilling, setShowBilling] = useState(false);
+  const [showVision, setShowVision] = useState(false);
+  const [visionResults, setVisionResults] = useState<{type: string; text: string; time: string; source?: string}[]>([]);
+  const [visionLoading, setVisionLoading] = useState(false);
   const [plans, setPlans] = useState<PlanInfo[]>([]);
   const [usage, setUsage] = useState<{ commands_today: number; commands_limit: number }>({ commands_today: 0, commands_limit: 10 });
   const [currentPlan, setCurrentPlan] = useState("free");
@@ -805,7 +808,19 @@ function ConsoleScreen({
         {token && (
           <div className="px-3 py-2 space-y-0.5">
             <button
-              onClick={() => { setShowHistory(!showHistory); setShowBilling(false); }}
+              onClick={() => { setShowVision(!showVision); setShowHistory(false); setShowBilling(false); }}
+              className={`cmd-btn w-full flex items-center gap-2.5 px-3 py-2 text-sm group ${
+                showVision ? "text-cyan-400 bg-cyan-500/8" : "text-zinc-400 hover:text-white"
+              }`}
+            >
+              <Eye className={`w-4 h-4 ${showVision ? "text-cyan-500" : "text-zinc-600 group-hover:text-cyan-500"} transition-colors`} />
+              <span className="font-medium text-xs">Vision</span>
+              {visionResults.length > 0 && (
+                <span className="ml-auto status-badge bg-cyan-500/15 text-cyan-400">{visionResults.length}</span>
+              )}
+            </button>
+            <button
+              onClick={() => { setShowHistory(!showHistory); setShowBilling(false); setShowVision(false); }}
               className={`cmd-btn w-full flex items-center gap-2.5 px-3 py-2 text-sm group ${
                 showHistory ? "text-orange-400 bg-orange-500/8" : "text-zinc-400 hover:text-white"
               }`}
@@ -817,7 +832,7 @@ function ConsoleScreen({
               )}
             </button>
             <button
-              onClick={() => { setShowBilling(!showBilling); setShowHistory(false); }}
+              onClick={() => { setShowBilling(!showBilling); setShowHistory(false); setShowVision(false); }}
               className={`cmd-btn w-full flex items-center gap-2.5 px-3 py-2 text-sm group ${
                 showBilling ? "text-orange-400 bg-orange-500/8" : "text-zinc-400 hover:text-white"
               }`}
@@ -1176,6 +1191,159 @@ function ConsoleScreen({
                   </div>
                 );
               })}
+            </div>
+          </div>
+        )}
+
+        {/* Vision Panel */}
+        {showVision && (
+          <div className="w-96 border-l border-zinc-800/60 flex flex-col shrink-0 slide-in-right" style={{ background: "rgba(14,14,20,0.6)" }}>
+            <div className="h-12 border-b border-zinc-800/60 flex items-center justify-between px-5 shrink-0">
+              <div className="flex items-center gap-2">
+                <Eye className="w-4 h-4 text-cyan-500" />
+                <span className="text-sm font-semibold text-zinc-300">Vision Assistant</span>
+              </div>
+              <button onClick={() => setShowVision(false)} className="text-zinc-600 hover:text-zinc-300 transition-colors p-1 rounded-md hover:bg-white/[0.05]">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Vision Actions */}
+            <div className="p-4 border-b border-zinc-800/60 space-y-3">
+              <div className="flex gap-2">
+                <button
+                  onClick={async () => {
+                    setVisionLoading(true);
+                    try {
+                      const res = await fetch(`${API}/vision/analyze`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ image: "", prompt: "Describe what you see", include_context: true }),
+                      });
+                      const data = await res.json();
+                      if (data.status === "success") {
+                        setVisionResults(prev => [{ type: "analysis", text: data.analysis || "No analysis", time: new Date().toLocaleTimeString(), source: "Screen" }, ...prev]);
+                      } else {
+                        setVisionResults(prev => [{ type: "error", text: data.message || "Analysis failed", time: new Date().toLocaleTimeString() }, ...prev]);
+                      }
+                    } catch { setVisionResults(prev => [{ type: "error", text: "Vision API unreachable. Use the Electron desktop app for screen capture.", time: new Date().toLocaleTimeString() }, ...prev]); }
+                    setVisionLoading(false);
+                  }}
+                  disabled={visionLoading}
+                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 hover:bg-cyan-500/20 text-xs font-semibold transition-all disabled:opacity-50"
+                >
+                  {visionLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eye className="w-3.5 h-3.5" />}
+                  Analyze
+                </button>
+                <button
+                  onClick={async () => {
+                    setVisionLoading(true);
+                    try {
+                      const res = await fetch(`${API}/vision/ocr`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ image: "" }),
+                      });
+                      const data = await res.json();
+                      if (data.status === "success") {
+                        setVisionResults(prev => [{ type: "ocr", text: data.text || "No text found", time: new Date().toLocaleTimeString() }, ...prev]);
+                      }
+                    } catch { setVisionResults(prev => [{ type: "error", text: "OCR API unreachable", time: new Date().toLocaleTimeString() }, ...prev]); }
+                    setVisionLoading(false);
+                  }}
+                  disabled={visionLoading}
+                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-white/[0.03] border border-zinc-800/50 text-zinc-400 hover:text-cyan-400 hover:border-cyan-500/20 text-xs font-semibold transition-all disabled:opacity-50"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  OCR
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={async () => {
+                    try {
+                      const res = await fetch(`${API}/vision/context`);
+                      const data = await res.json();
+                      if (data.status === "success" && data.memory) {
+                        const entries = data.memory.map((m: {timestamp: string; summary: string}) => ({
+                          type: "context", text: m.summary || "(no summary)", time: new Date(m.timestamp).toLocaleTimeString(),
+                        }));
+                        setVisionResults(entries);
+                      }
+                    } catch { /* ignore */ }
+                  }}
+                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-white/[0.03] border border-zinc-800/50 text-zinc-500 hover:text-zinc-300 text-xs transition-all"
+                >
+                  <History className="w-3 h-3" />
+                  Load History
+                </button>
+                <button
+                  onClick={() => { setVisionResults([]); fetch(`${API}/vision/context`, { method: "DELETE" }).catch(() => {}); }}
+                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-white/[0.03] border border-zinc-800/50 text-zinc-500 hover:text-red-400 text-xs transition-all"
+                >
+                  <X className="w-3 h-3" />
+                  Clear
+                </button>
+              </div>
+              <p className="text-xs text-zinc-700 text-center">
+                Full screen capture requires the Electron desktop app.
+                Web mode connects to vision API endpoints.
+              </p>
+            </div>
+
+            {/* Vision Results */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              {visionResults.length === 0 ? (
+                <div className="text-center py-16 px-4">
+                  <div className="w-12 h-12 rounded-2xl bg-cyan-500/5 flex items-center justify-center mx-auto mb-4 ring-1 ring-cyan-500/10">
+                    <Eye className="w-6 h-6 text-cyan-500/30" />
+                  </div>
+                  <p className="text-sm text-zinc-500 mb-1 font-medium">No observations yet</p>
+                  <p className="text-xs text-zinc-700">
+                    Use <span className="text-cyan-400/70">Analyze</span> to capture and analyze your screen,
+                    or <span className="text-cyan-400/70">OCR</span> to extract text.
+                  </p>
+                  <p className="text-xs text-zinc-700 mt-2">
+                    Desktop hotkeys: <span className="font-mono text-cyan-400/50">Ctrl+Shift+V</span> analyze,{" "}
+                    <span className="font-mono text-cyan-400/50">Ctrl+Shift+T</span> OCR
+                  </p>
+                </div>
+              ) : (
+                visionResults.map((result, i) => (
+                  <div
+                    key={i}
+                    className={`rounded-xl p-4 text-xs border transition-all ${
+                      result.type === "error"
+                        ? "border-red-500/20 bg-red-500/5"
+                        : result.type === "ocr"
+                        ? "border-purple-500/20 bg-purple-500/5"
+                        : result.type === "context"
+                        ? "border-zinc-700/50 bg-white/[0.02]"
+                        : "border-cyan-500/20 bg-cyan-500/5"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className={`text-xs font-semibold uppercase tracking-wider ${
+                        result.type === "error" ? "text-red-400"
+                        : result.type === "ocr" ? "text-purple-400"
+                        : result.type === "context" ? "text-zinc-500"
+                        : "text-cyan-400"
+                      }`}>
+                        {result.type}
+                      </span>
+                      <span className="text-zinc-700 text-xs ml-auto">{result.time}</span>
+                    </div>
+                    {result.source && <p className="text-zinc-600 text-xs mb-1">Source: {result.source}</p>}
+                    <p className={`whitespace-pre-wrap leading-relaxed ${
+                      result.type === "error" ? "text-red-300/80"
+                      : result.type === "ocr" ? "text-purple-300/80 font-mono"
+                      : "text-zinc-300"
+                    }`}>
+                      {result.text.length > 500 ? result.text.slice(0, 500) + "..." : result.text}
+                    </p>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         )}
