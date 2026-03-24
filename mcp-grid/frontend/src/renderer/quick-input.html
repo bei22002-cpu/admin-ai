@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src http://localhost:* http://127.0.0.1:*;"
+    />
+    <title>MCP Quick Command</title>
+    <link rel="stylesheet" href="styles/tron.css" />
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background: transparent;
+        overflow: hidden;
+      }
+
+      .quick-container {
+        display: flex;
+        align-items: center;
+        height: 70px;
+        padding: 0 12px;
+        background: rgba(0, 0, 0, 0.95);
+        border: 2px solid var(--tron-orange);
+        border-radius: 8px;
+        box-shadow: 0 0 30px rgba(255, 140, 0, 0.3),
+          inset 0 0 20px rgba(255, 140, 0, 0.05);
+      }
+
+      .quick-prefix {
+        color: var(--tron-orange);
+        font-family: var(--font-mono);
+        font-size: 18px;
+        font-weight: bold;
+        margin-right: 12px;
+        text-shadow: 0 0 10px var(--tron-orange);
+      }
+
+      .quick-input {
+        flex: 1;
+        background: transparent;
+        border: none;
+        outline: none;
+        color: var(--tron-text);
+        font-family: var(--font-mono);
+        font-size: 18px;
+        letter-spacing: 1px;
+      }
+
+      .quick-input::placeholder {
+        color: rgba(255, 140, 0, 0.3);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="quick-container">
+      <span class="quick-prefix">MCP&gt;</span>
+      <input
+        type="text"
+        class="quick-input"
+        id="quickInput"
+        placeholder="Enter command..."
+        autocomplete="off"
+        spellcheck="false"
+        autofocus
+      />
+    </div>
+
+    <script>
+      const input = document.getElementById("quickInput");
+
+      input.addEventListener("keydown", async (e) => {
+        if (e.key === "Enter" && input.value.trim()) {
+          const cmd = input.value.trim();
+          let command = cmd;
+          let args = "";
+
+          // Parse "MCP <command> <args>"
+          if (cmd.toLowerCase().startsWith("mcp ")) {
+            const parts = cmd.substring(4).split(" ");
+            command = parts[0];
+            args = parts.slice(1).join(" ");
+          } else {
+            const parts = cmd.split(" ");
+            command = parts[0];
+            args = parts.slice(1).join(" ");
+          }
+
+          await window.mcp.sendCommand(command, args);
+          await window.mcp.closeQuickInput();
+        } else if (e.key === "Escape") {
+          await window.mcp.closeQuickInput();
+        }
+      });
+
+      // Auto-focus
+      window.addEventListener("focus", () => input.focus());
+    </script>
+  </body>
+</html>
